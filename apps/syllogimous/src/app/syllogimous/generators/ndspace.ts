@@ -6,11 +6,12 @@
  */
 
 import { GeneratorContext, deepConclusions } from "./context";
+import { LINEAR_SCALES } from "../utils/linear.utils";
 import { buildConstructClaims } from "./context";
 import { Question } from "../models/question.models";
 import { coinFlip, getRandomSymbols, pickUniqueItems, shuffle } from "../utils/question.utils";
 import { describeTransform } from "../utils/transformations.utils";
-import { AxisSpec, NdConclusion, NdLayout, applyNdEdits, applyNdTransforms, axesForDimensions, buildNdAnalogy, buildNdAnalogySet, buildNdConclusion, buildNdConclusionSet, buildNdWideConclusion, buildNdConstructClaim, NdEdge, buildNdLayout, describeNdAxes, determinedOn, graphDistance, ndPrefixLayout, ndWidth, pickByWidth, displacementOn, drawNdEdits, drawNdTransforms, explainNdAxis, indeterminatePairs, isCircular, mod, ndTransformVocab, pickDistantPair as pickDistantPairNd, renderNdEdit, renderNdPremise, renderNdPremises, withholdClauses } from "../utils/ndspace.utils";
+import { AxisSpec, NdConclusion, NdLayout, NdRank, ndAxisColors, applyNdEdits, applyNdTransforms, axesForDimensions, buildNdAnalogy, buildNdAnalogySet, buildNdConclusion, buildNdConclusionSet, buildNdWideConclusion, buildNdConstructClaim, NdEdge, buildNdLayout, describeNdAxes, determinedOn, graphDistance, ndPrefixLayout, ndWidth, pickByWidth, displacementOn, drawNdEdits, drawNdTransforms, explainNdAxis, explainNdPair, indeterminatePairs, isCircular, isParity, mod, bridgeReading, drawBridge, ndPairDepth, renderNdCoupling, clockAxes, clockModel, inReading, renderZoneAnchor, skewEdges, coneAxes, coneLayout, edgeSteps, routeForms, routePath, routeSteps, timeBounds, travelSteps, kindsFaceValue, kindsLayout, relDelta, countedAxes, drawWalk, walkDistance, walkLures, walkReading, boundsOn, drawRanks, rankOrder, ndTransformVocab, pickDistantPair as pickDistantPairNd, renderNdEdit, renderNdPremise, renderNdPremises, withholdClauses } from "../utils/ndspace.utils";
 import { orderPremises, scrambleBlocks, scrambleByFactor, scrambleLeading } from "../utils/premise-order.utils";
 import { canGenerateQuestion, clampPremises } from "../models/settings.models";
 import { LinearFeatureFlags } from "../services/settings-override.service";
@@ -18,12 +19,15 @@ import { EnumQuestionType } from "../constants/question.constants";
 import { hi, rel, subj } from "../utils/phrasing";
 import { SPEAKERS_NOTE, TESTIMONY_NOTE, describeStatement, drawClaims, solve } from "../utils/knaves.utils";
 import {
-    Egocentric, FACING_NOTE, MIRRORED, MIRROR_NOTE, OPPOSITE, bearingPlane,
+    Egocentric, FACING_NOTE, HEADING_NOTE, MIRRORED, MIRROR_NOTE, OPPOSITE, bearingPlane, bearingSpace, describeHead, headedSide,
     describeBearing, describeEgocentric, describeTwin,
     describeFacing, egocentric,
 } from "../utils/facing.utils";
 import { QUESTION_TYPE_SETTING_PARAMS } from "../constants/settings.constants";
-import { COMPACT_NOTE, EDIT_NOTE, INDETERMINATE_NOTE, ND_ANALOGY_NOTE, ND_TRANSFORM_NOTE, ONE_STEP_NOTE } from "./notes";
+import { BRIDGE_NOTE, CLOCK_NOTE, COMPACT_NOTE, CONE_NOTE, KIND_NOTE, NEAREST_NOTE, RANK_NOTE, WALK_NOTE, ONE_STEP_MINUTES_NOTE, REACH_NOTE, SIGNAL_NOTE, EDIT_NOTE, INDETERMINATE_NOTE, ND_ANALOGY_NOTE, ND_TRANSFORM_NOTE, ONE_STEP_NOTE, UNNAMED_NOTE } from "./notes";
+import { createTwistedSeam, twistAxes } from "./twisted-seam";
+import { dialCost } from "../utils/ability.utils";
+import { ladderFor } from "../utils/progression.utils";
 
 /** How many dimensions each composed-space mode asks for. */
 export function dimensionsOf(ctx: GeneratorContext, type: EnumQuestionType): number {
@@ -79,6 +83,161 @@ export function createNdSpace(ctx: GeneratorContext, numOfPremises: number, type
     const base = ndFeatures(ctx, type);
 
     /*
+     * Loops are applied to the axes that have cyclic wording — a ring of
+     * sizes or of quantities is not something anyone can reason about, so
+     * those stay straight however many the rung has earned.
+     */
+    const circularCapable = scales
+        .map((s, i) => (s.cyclic ? i : -1))
+        .filter(i => i >= 0);
+    const loops = new Set(circularCapable.slice(0, base.circular));
+
+    const axes: AxisSpec[] = scales.map((scale, i) => ({
+        scale,
+        // An odd modulus never lets a pair sit exactly opposite, an even one
+        // does; alternating keeps both kinds of claim in circulation.
+        modulus: loops.has(i) ? (coinFlip() ? 4 : 5) : undefined,
+    }));
+
+    /*
+     * Local clocks need a straight time axis to read and an east axis to set
+     * them. The axis picker can drop either from any stack, and the circular
+     * dial can bend time into a loop; on those stacks the rung is held and
+     * cannot be delivered, and the item says so rather than being priced for
+     * it. A looped east axis is the date-line form, not an exclusion.
+     */
+    const timeAxis = axes.findIndex(a => a.scale.id === "temporal" && !isCircular(a) && !isParity(a));
+    const eastAxis = axes.findIndex(a => a.scale.id === "east" && !isParity(a));
+    const clockable = timeAxis >= 0 && eastAxis >= 0;
+    const dateLine = clockable && isCircular(axes[eastAxis]);
+    // The cone, likewise, needs time and two travel axes that are all straight.
+    const coneable = !!coneAxes(axes);
+    // Kind frames need a straight axis to reframe; the parity axis that
+    // carries kind is added where the stack has none.
+    const frameable = axes.some(a => !isCircular(a) && !isParity(a));
+    // A total needs a straight axis to cut and another to subtract.
+    const walkable = countedAxes(axes).length >= 2;
+    // A list needs a key and a tiebreak with an order people already sort by.
+    const rankable = !!rankOrder(axes);
+
+    /*
+     * One coupling per item, decided before anything else is.
+     *
+     * Every coupling rung is a claim about the premises as stated — a bridge
+     * between two axes, a clock read off another axis — so an item carries at
+     * most one, and shares itself with nothing that rewrites, replaces or
+     * reinterprets the premises: reports and testimony replace them, a facing
+     * re-reads them from inside, and a checkpoint needs a prefix that already
+     * settles something, which a coupled axis never does until the coupling is
+     * read. Those step aside for the item and are recorded as not delivered,
+     * as is every held coupling the item did not get, so nothing is priced as
+     * though it were carried.
+     *
+     * Half the time when any is held, the way analogy and construction share:
+     * a rung that took every item would stop the ones it displaces from ever
+     * being served, which is the facing bug again from the other side.
+     */
+    const heldCouplings = [
+        ...(base.bridges ? ["bridges"] : []),
+        ...(base.localClocks ? ["local-clocks"] : []),
+        ...(base.cone ? ["cone"] : []),
+        ...(base.kinds ? ["kinds"] : []),
+        ...(base.walkingTotals ? ["walking-totals"] : []),
+        ...(base.ranked ? ["ranked"] : []),
+        ...(base.twistedSeam ? ["twisted-seam"] : []),
+    ];
+    const offered = heldCouplings
+        .filter(r => r !== "local-clocks" || clockable)
+        .filter(r => r !== "cone" || coneable)
+        .filter(r => r !== "kinds" || frameable)
+        .filter(r => r !== "walking-totals" || walkable)
+        .filter(r => r !== "ranked" || rankable)
+        .filter(r => r !== "twisted-seam" || !!twistAxes(scales));
+    /*
+     * Which one, weighted towards what the player has hardly met.
+     *
+     * Drawn evenly, every rung's share fell with each rung earned after it, and
+     * so did the share of the one just earned: at the top of the 4D-7D ladder
+     * each came up in five to eight items in a hundred and heading in four, so
+     * a player could be promoted past a rung having met it a handful of times.
+     * Now a rung the trial log shows carried fewer than thirty times weighs up
+     * to three times as much, falling to even as it is played. Nobody's top
+     * rung stays favoured for good, and once everything has been met the draw
+     * is even, as it was.
+     *
+     * Heading draws here too, though it is not a coupling. It lives on the
+     * facing branch, which only an uncoupled item reaches, and there it was
+     * tried first and gave way to a flat facing most of the time. Drawn, it
+     * claims the item, and the conclusion keeps trying layouts until one can
+     * carry a head.
+     */
+    const carried = (r: string) => {
+        try { return ctx.progressionService.carriedCount?.(type, r) ?? 0; } catch { return 0; }
+    };
+    const fresh = (r: string) => 1 + 2 * Math.max(0, 1 - carried(r) / 30);
+    const weightOf = (r: string) => r === "cone"
+        ? Math.max(fresh("cone"), ...(base.signals ? [fresh("signals")] : []), ...(base.reach ? [fresh("reach")] : []))
+        : fresh(r);
+    const draws = [...offered, ...(base.heading && bearingSpace(axes) ? ["heading"] : [])];
+    const drawn = draws.length && numOfPremises >= 4 && coinFlip() ? weightedPick(draws, weightOf) : null;
+    const coupling = drawn === "heading" ? null : drawn;
+    const favourHeading = drawn === "heading";
+    /*
+     * A twisted ring is its own small arrangement, built apart from the layout
+     * code — which reduces a loop once at the end, and that is wrong across a
+     * twist — and asks only whether its placements can all hold. So it carries
+     * nothing else the ladder holds except branching, and records the rest.
+     *
+     * The ring is forced whatever the loop dial says, so the dial is priced at
+     * the one loop the item has: charged when the dial gave none, refunded for
+     * the loops it gave that this item does not carry.
+     */
+    if (coupling === "twisted-seam") {
+        const q = createTwistedSeam(ctx, type, scales, numOfPremises, base.branching, coinFlip());
+        if (!q) throw new Error("Cannot generate.");
+        q.undelivered.push(...ladderFor(type).filter(r =>
+            ctx.hasRung(type, r) && r !== "twisted-seam" && r !== "branching"));
+        q.surcharge = dialCost("circular", 1) - dialCost("circular", base.circular);
+        return q;
+    }
+    const wantBridge = coupling === "bridges";
+    const wantClocks = coupling === "local-clocks";
+    const wantCone = coupling === "cone";
+    const wantKinds = coupling === "kinds";
+    const wantWalk = coupling === "walking-totals";
+    /*
+     * Two forms on one rung: a premise with a total (Form A), or the nearest
+     * question, which asks for the total itself. The open-budget form is a
+     * later rung of its own.
+     */
+    const walkNearest = wantWalk && coinFlip();
+    const wantRanked = coupling === "ranked";
+    // Whether the ranked claim is true, decided once rather than per draw.
+    const rankedTrue = wantRanked && coinFlip();
+    /*
+     * A kinds item reads kind off a parity axis, and only the seven-axis stack
+     * has one. Elsewhere it is appended for the item — one axis wider than the
+     * mode, so priced as such, per premise, at MODE_SCALE's 6D-to-7D step —
+     * rather than the rung being held and never delivered on 2D to 6D.
+     */
+    const appendParity = wantKinds && !axes.some(a => isParity(a));
+    const kindAxes: AxisSpec[] = appendParity ? [...axes, { scale: LINEAR_SCALES["distinction"] }] : axes;
+    const kindRule: "mirror" | "swap" = axes.filter(a => !isCircular(a) && !isParity(a)).length >= 2 && coinFlip()
+        ? "swap" : "mirror";
+    /*
+     * Which premise form a cone item is built around: plain stated times, or
+     * the signal or reach premises a later rung adds. One per item, from those
+     * held, and only that one is charged — each changes the item in its own
+     * way and an item carrying a form it does not use is priced for nothing.
+     */
+    const coneKinds: Array<"cone" | "signal" | "reach"> = [
+        "cone", ...(base.signals ? ["signal" as const] : []), ...(base.reach ? ["reach" as const] : []),
+    ];
+    const coneKind = weightedPick(coneKinds, k => fresh(k === "cone" ? "cone" : k === "signal" ? "signals" : "reach"));
+    const coneSelect = wantCone && (base.chooseConclusion || base.constructConclusion) && coinFlip();
+    const coneWant = wantCone ? { yes: coinFlip(), boundTrap: coinFlip() } : { yes: true, boundTrap: false };
+
+    /*
      * A checkpoint item is built without mutations, because otherwise it is
      * never built at all.
      *
@@ -100,27 +259,56 @@ export function createNdSpace(ctx: GeneratorContext, numOfPremises: number, type
      * which would delete a form of item that works — it is the scale family's
      * top rung and fires there.
      */
-    const wantCheckpoint = base.checkpoint && numOfPremises > 4 && coinFlip();
-    const feat = wantCheckpoint
+    const wantCheckpoint = !coupling && !favourHeading && base.checkpoint && numOfPremises > 4 && coinFlip();
+    const feat = coupling
+        ? {
+            ...base, speakers: false, testimony: false, facing: false, twins: false, checkpoint: false,
+            /*
+             * A clocked premise has to state its east clause, or its time
+             * clause cannot be corrected and nothing it says about time is
+             * usable; so nothing is withheld on a clocked item.
+             */
+            // And nothing on a cone or nearest item either, whose questions
+            // are their own and withhold nothing.
+            indeterminate: base.indeterminate && !wantClocks && !wantCone && !walkNearest,
+            analogy: base.analogy && !wantKinds,
+        }
+        : wantCheckpoint
         ? { ...base, edits: 0, transforms: 0, speakers: false, testimony: false }
+        : favourHeading
+        ? { ...base, favourHeading: true }
         : base;
-
-    /*
-     * Loops are applied to the axes that have cyclic wording — a ring of
-     * sizes or of quantities is not something anyone can reason about, so
-     * those stay straight however many the rung has earned.
-     */
-    const circularCapable = scales
-        .map((s, i) => (s.cyclic ? i : -1))
-        .filter(i => i >= 0);
-    const loops = new Set(circularCapable.slice(0, feat.circular));
-
-    const axes: AxisSpec[] = scales.map((scale, i) => ({
-        scale,
-        // An odd modulus never lets a pair sit exactly opposite, an even one
-        // does; alternating keeps both kinds of claim in circulation.
-        modulus: loops.has(i) ? (coinFlip() ? 4 : 5) : undefined,
-    }));
+    const displaced = coupling
+        ? ["speakers", "testimony", "facing", "mirror-twins", "heading", "checkpoint",
+           ...(wantClocks || wantCone ? ["indeterminate"] : []),
+           /*
+            * A cone item asks its own question, so the conclusion forms that
+            * would otherwise shape it are not carried — except choice, whose
+            * place the select form takes when it is held.
+            */
+           ...(wantCone ? ["analogy", "construct-conclusion", "construct-distance",
+               ...(coneSelect ? [] : ["choose-conclusion"])] : []),
+           /*
+            * An analogy compares two relations' sign vectors, which depend on
+            * whose reckoning each is read in — two references, two frames. Kept
+            * off a kinds item rather than given a rule nobody has stated.
+            */
+           ...(wantKinds ? ["analogy"] : []),
+           // The nearest question is the item's whole conclusion, as the cone's is.
+           ...(walkNearest ? ["indeterminate", "analogy", "construct-conclusion", "construct-distance",
+               "choose-conclusion"] : []),
+           /*
+            * A ranking says "at least", never "exactly", so a ranked item asks
+            * one claim of necessity about the tiebreak and nothing that needs a
+            * distance or a whole relation.
+            */
+           ...(wantRanked ? ["analogy", "construct-conclusion", "construct-distance", "choose-conclusion"] : []),
+          ].filter(r => ctx.hasRung(type, r))
+        : [];
+    // The cone's later rungs ride on it, and are charged only on the item
+    // whose premises they shaped.
+    const coneRungs = { signal: "signals", reach: "reach" } as const;
+    const heldConeForms = [...(base.signals ? ["signals"] : []), ...(base.reach ? ["reach"] : [])];
 
     /*
      * Edit and transformation premises come out of the object count rather
@@ -146,11 +334,24 @@ export function createNdSpace(ctx: GeneratorContext, numOfPremises: number, type
         feat.transforms,
         Math.max(0, numOfPremises - 3 - editCount),
         Math.max(0, numOfPremises + 1 - objectFloor - editCount));
-    const objectCount = Math.max(4, numOfPremises + 1 - editCount - transformCount);
+    // A bridge is a premise too, as is the date line's anchor, and each comes
+    // out of the objects as edits do.
+    const couplingPremises = wantRanked ? 2
+        : wantBridge || (wantClocks && dateLine) || (wantWalk && !walkNearest) ? 1 : 0;
+    const objectCount = Math.max(4, numOfPremises + 1 - editCount - transformCount - couplingPremises);
     const vocab = ndTransformVocab(axes);
 
     for (let attempt = 0; attempt < 300; attempt++) {
-        const words = getRandomSymbols(settings, objectCount);
+        /*
+         * A coupling that cannot be found in two hundred layouts is not found
+         * in the last hundred either; those build an ordinary item, richer by
+         * the coupling's own premise so the count still holds, and say the
+         * coupling was not delivered.
+         */
+        const coupling_ = coupling && attempt < 200 ? coupling : null;
+        const bridging = coupling_ === "bridges";
+        const clocking = coupling_ === "local-clocks";
+        const words = getRandomSymbols(settings, objectCount + (coupling && !coupling_ ? couplingPremises : 0));
 
         /*
          * Nine draws, and keep one by width.
@@ -173,7 +374,7 @@ export function createNdSpace(ctx: GeneratorContext, numOfPremises: number, type
             : undefined;
 
         const batch = Array.from({ length: 9 }, () =>
-            buildNdLayout(words, axes, { branching: feat.branching }));
+            buildNdLayout(words, coupling_ === "kinds" ? kindAxes : axes, { branching: feat.branching }));
         const scope = scoped?.length ? scoped : undefined;
 
         /*
@@ -202,9 +403,39 @@ export function createNdSpace(ctx: GeneratorContext, numOfPremises: number, type
         // configuration usually is" rather than an absolute figure.
         const widthDelta = ndWidth(drawn, scope) - ndWidth(pickByWidth(batch, 50, scope), scope);
 
-        const layout = feat.indeterminate
-            ? withholdClauses(drawn, 1 + Math.floor(Math.random() * 2))
-            : drawn;
+        /*
+         * The bridge's cut is the item's withheld clause. Nothing else is
+         * withheld on a bridged item: a second gap could leave the bridge's own
+         * source open, and then nothing on the item would be decidable.
+         */
+        const bridged = bridging ? drawBridge(drawn) : null;
+        if (bridging && !bridged) continue;
+        /*
+         * The drawn steps become what the clocked premises say, and the real
+         * arrangement is worked back from them — so the drawn layout is exactly
+         * the model of a reader who takes every clause at face value.
+         */
+        const clocked = clocking ? skewEdges(drawn, timeAxis, eastAxis) : null;
+        /*
+         * A cone item re-times the drawn layout in minutes and turns some of
+         * its premises into signal or reach premises — about one in four, so a
+         * route has a fair chance of running through one.
+         */
+        const coned = coupling_ === "cone"
+            ? coneLayout(drawn, coneKind, 1 + Math.floor(numOfPremises / 4))
+            : null;
+        if (coupling_ === "cone" && !coned) continue;
+        const kinded = coupling_ === "kinds" ? kindsLayout(drawn, kindRule) : null;
+        if (coupling_ === "kinds" && !kinded) continue;
+        const walked = coupling_ === "walking-totals" && !walkNearest ? drawWalk(drawn) : null;
+        if (coupling_ === "walking-totals" && !walkNearest && !walked) continue;
+        const neared = coupling_ === "walking-totals" && walkNearest ? drawn : null;
+        const ranked = coupling_ === "ranked" ? drawRanks(drawn) : null;
+        if (coupling_ === "ranked" && !ranked) continue;
+        const layout = bridged ?? clocked ?? coned ?? kinded ?? walked ?? neared ?? ranked
+            ?? (feat.indeterminate
+                ? withholdClauses(drawn, 1 + Math.floor(Math.random() * 2))
+                : drawn);
 
         /*
          * Edits rewrite the stated relations; transformations move objects
@@ -255,10 +486,79 @@ export function createNdSpace(ctx: GeneratorContext, numOfPremises: number, type
          * alongside meta: a checkpoint the reader cannot answer at the
          * checkpoint is not one.
          */
-        const canCheckpoint = !editCount && !transformCount && !reported && !told;
-        if (!fillNdConclusion(
-            ctx, question, layout, final, feat, numOfPremises, attempt >= 250,
-            extraPremises, asked, canCheckpoint)) continue;
+        const canCheckpoint = !editCount && !transformCount && !reported && !told && !bridged && !clocked;
+        /*
+         * Which clock a clocked item is asked by. Either, so that answering
+         * from the premises in the wrong reading is a lure rather than a
+         * convention the reader can settle once and stop reading.
+         */
+        const reading: "station" | "local" = clocked && coinFlip() ? "local" : "station";
+        const asRead = (l: NdLayout) => inReading(l, reading);
+        /*
+         * On a bridged item the "before" layout is the bridge misread as one
+         * ordinary step, and the reversed reading is a second lure. Every
+         * conclusion form already refuses a claim whose answer survives the
+         * reading it is handed, so this makes all of them — analogy and
+         * construction included — need the bridge, rather than only a pair
+         * chosen to cross it.
+         */
+        /*
+         * A clocked item does the same with the clocks: the literal reading is
+         * `initial`, correcting the wrong way is a lure, and on a looped east
+         * axis so is correcting as though the loop had no date line. Its time
+         * answers are balanced by class, because the two bites together pull
+         * them towards "same time" (43% in the prototype).
+         */
+        const fill = bridged
+            ? { initial: bridgeReading(bridged, "one-step"), final,
+                coupling: { lures: [bridgeReading(bridged, "reversed")], axis: bridged.couplings![0].axis } }
+            : clocked
+            ? { initial: asRead(clockModel(clocked, "literal")), final: asRead(clocked),
+                coupling: {
+                    lures: [asRead(clockModel(clocked, "wrong-way")),
+                        ...(dateLine ? [asRead(clockModel(clocked, "no-date-line"))] : [])],
+                    axis: timeAxis, balance: timeAxis,
+                } }
+            /*
+             * Face value is `initial`, and the frame change applied to the whole
+             * result is a lure: an item either kind-blind reading gets right is
+             * not a kinds item.
+             */
+            /*
+             * The total read as an ordinary one-step premise is `initial`; each
+             * leg counted as one step, and the whole total given to the cut
+             * axis, are the further lures.
+             */
+            : walked
+            ? { initial: walkReading(walked, "one-step"), final,
+                coupling: { lures: [walkReading(walked, "legs"), walkReading(walked, "whole")],
+                    axis: walked.couplings![0].axis } }
+            : kinded
+            ? { initial: kindsFaceValue(kinded, 0), final,
+                coupling: { lures: [kindsFaceValue(kinded, 1)], axis: kinded.frames!.axes[0] } }
+            : { initial: layout, final, coupling: {} };
+        if (coned) {
+            if (!fillConeConclusion(question, coned, coneKind, coneSelect, coneWant)) continue;
+        } else if (neared) {
+            if (!fillNearestConclusion(question, neared)) continue;
+        } else if (ranked) {
+            if (!fillRankedConclusion(question, ranked, rankedTrue)) continue;
+        } else if (!fillNdConclusion(
+            ctx, question, fill.initial, fill.final, feat,
+            // A coupled item gives up on analogy sooner: a matching pair the
+            // coupling also decides is rare at six axes, and the coupling is
+            // the rung this item exists to deliver.
+            numOfPremises, attempt >= (coupling_ ? 150 : 250), extraPremises, asked, canCheckpoint,
+            fill.coupling)) continue;
+
+        const delivered = bridged ? "bridges" : clocked ? "local-clocks" : coned ? "cone" : kinded ? "kinds"
+            : walked || neared ? "walking-totals" : ranked ? "ranked" : null;
+        if (kinded && appendParity) question.surcharge = Math.round(0.2 * numOfPremises * 100) / 100;
+        question.undelivered.push(...heldCouplings.filter(r => r !== delivered));
+        question.undelivered.push(...heldConeForms.filter(r =>
+            !coned || coneKind === "cone" || r !== coneRungs[coneKind]));
+        // Set aside for the coupling whether or not one was found in the end.
+        question.undelivered.push(...displaced);
 
         /*
          * The testimony has to be load-bearing.
@@ -279,6 +579,8 @@ export function createNdSpace(ctx: GeneratorContext, numOfPremises: number, type
             ? [...reported.premises, ...extraPremises]
             : [
                 ...renderNdPremises(layout, { compact: feat.compact }),
+                ...(layout.couplings ?? []).map(c => renderNdCoupling(layout, c)),
+                ...(clocked && dateLine ? [renderZoneAnchor(clocked, eastAxis)] : []),
                 ...extraPremises,
             ];
         const mutations = [
@@ -378,10 +680,15 @@ export function createNdSpace(ctx: GeneratorContext, numOfPremises: number, type
         question.bucket = [...words];
         question.widthDelta = widthDelta;
         // Post-operation, so the picture matches the question asked.
-        question.wordCoordMap = { ...final.coords };
-        question.axisNames = axes.map(a => a.scale.name);
+        // By the station clock on a clocked item: the picture is of where and
+        // when things are, not of what some clock said.
+        question.wordCoordMap = { ...(clocked ?? final).coords };
+        question.axisNames = layout.axes.map(a => a.scale.name);
         question.setup = [
-            ...ndSetup(ctx, axes, feat, edits.length > 0, transforms.length > 0),
+            ...ndSetup(ctx, layout.axes, feat, edits.length > 0, transforms.length > 0,
+                { bridged: !!bridged, clocked: clocked ? { layout: clocked, reading } : undefined,
+                  coned: coned ?? undefined, kinded: kinded ?? undefined,
+                  walked: !!walked, neared: !!neared, ranked: ranked ?? undefined }),
             ...question.setup,
         ];
         return question;
@@ -443,6 +750,12 @@ export function ndFeatures(ctx: GeneratorContext, type: EnumQuestionType) {
         && edits === 0 && transforms === 0;
     /* Mirror twins are a way of *reading* a facing, so they need one to read. */
     const twins = facing && ladder("mirror-twins");
+    /*
+     * Facing with a head: the same reading in three dimensions, where a facing
+     * alone fixes no frame. Whether the stack has east, north and up to take it
+     * in is decided per item, where the axes are.
+     */
+    const heading = facing && ladder("heading");
 
     /*
      * Reported relations, some of them by liars. Same exclusions as
@@ -474,11 +787,49 @@ export function ndFeatures(ctx: GeneratorContext, type: EnumQuestionType) {
          */
         && !compact;
 
+    /*
+     * Bridges are premises about the arrangement as stated, so the same
+     * exclusions as under-specification: nothing that rewrites or moves it, and
+     * never compact, where a missing clause would mean "level" rather than
+     * "cut".
+     */
+    const bridges = ladder("bridges") && edits === 0 && transforms === 0 && !compact;
+    /*
+     * Same exclusions, for the same reason. Whether the stack can carry it —
+     * a straight time axis and an east axis — is decided where the axes are.
+     */
+    const localClocks = ladder("local-clocks") && edits === 0 && transforms === 0 && !compact;
+    /*
+     * The cone and its two later forms. Signals and reach only ever shape a
+     * cone item, so they are live only with it.
+     */
+    const cone = ladder("cone") && edits === 0 && transforms === 0 && !compact;
+    // Kind frames re-read every premise, so the same exclusions again.
+    const kinds = ladder("kinds") && edits === 0 && transforms === 0 && !compact;
+    // A total is a premise about the arrangement as stated, as a bridge is.
+    const walkingTotals = ladder("walking-totals") && edits === 0 && transforms === 0 && !compact;
+    // Rankings are premises about the arrangement as stated, too.
+    const ranked = ladder("ranked") && edits === 0 && transforms === 0 && !compact;
+    // A twisted ring builds its own arrangement, so nothing may rewrite one.
+    const twistedSeam = ladder("twisted-seam") && edits === 0 && transforms === 0 && !compact;
+
     return {
         testimony,
+        bridges,
+        localClocks,
+        cone,
+        signals: cone && ladder("signals"),
+        reach: cone && ladder("reach"),
+        kinds,
+        walkingTotals,
+        ranked,
+        twistedSeam,
         speakers: speakers && !testimony,
         facing,
         twins,
+        heading,
+        // Set per item, by the draw in createNdSpace, never by the ladder.
+        favourHeading: false,
         indeterminate,
         branching: pick("branching", "branching"),
         compact,
@@ -533,7 +884,19 @@ export function fillNdConclusion(ctx: GeneratorContext,
      * prefix.
      */
     canCheckpoint = false,
+    /**
+     * What a coupled item needs of its conclusion, from the caller that built
+     * the coupling.
+     *
+     * `lures`: further wrong readings the answer must disagree with, beside
+     * `initial` — the bridge read backwards, the clocks corrected the wrong
+     * way. Present (even empty) marks the item as coupled. `axis`: the axis the
+     * coupling decides, for the derivation. `balance`: an axis whose answer
+     * class is drawn first, for a coupling whose bites skew the answers.
+     */
+    coupling: { lures?: NdLayout[]; axis?: number; balance?: number } = {},
 ): boolean {
+    const lures = coupling.lures ?? [];
     /*
      * Mutations have to matter. A conclusion whose truth survives the edits
      * and transformations is answerable from the relations as first stated,
@@ -548,7 +911,8 @@ export function fillNdConclusion(ctx: GeneratorContext,
     const mutated = initial !== layout;
     const axisAnswer = (l: NdLayout, a: string, b: string, i: number) => {
         if (isCircular(l.axes[i])) return displacementOn(l, i, a, b);
-        const delta = l.coords[a][i] - l.coords[b][i];
+        // In b's reckoning, which differs from the coordinates only under frames.
+        const delta = relDelta(l, a, b)[i];
         return feat.constructDistance ? delta : Math.sign(delta);
     };
 
@@ -560,8 +924,9 @@ export function fillNdConclusion(ctx: GeneratorContext,
      * them. Operations can also cancel on an axis, which the pair-level test
      * cannot see either.
      */
+    const readings = [initial, ...lures];
     const axisBites = (a: string, b: string, i: number) => !mutated
-        || axisAnswer(initial, a, b, i) !== axisAnswer(layout, a, b, i);
+        || readings.every(r => axisAnswer(r, a, b, i) !== axisAnswer(layout, a, b, i));
 
     /** Construction states every axis at once, so the pair is the right unit. */
     const pairBites = (a: string, b: string) => !mutated
@@ -573,21 +938,154 @@ export function fillNdConclusion(ctx: GeneratorContext,
      * they moved the same way. The only honest question is whether the
      * claim's truth value is different before and after.
      */
-    const analogyBites = (c: { pairs: [string, string, string, string]; claimSame: boolean }) => {
-        if (!mutated) return true;
-        const held = (l: NdLayout) => {
-            const key = (x: string, y: string) => l.axes.map((axis, i) => isCircular(axis)
-                ? displacementOn(l, i, y, x)
-                : Math.sign(l.coords[y][i] - l.coords[x][i])).join(",");
-            const [a, b, x, y] = c.pairs;
-            const first = key(a, b);
-            const second = key(x, y);
-            const wanted = c.claimSame ? first : first.split(",").map((v, i) =>
-                isCircular(l.axes[i]) ? mod(-Number(v), l.axes[i].modulus!) : -Number(v)).join(",");
-            return second === wanted;
-        };
-        return held(initial) !== held(layout);
+    const analogyHeld = (l: NdLayout, c: { pairs: [string, string, string, string]; claimSame: boolean }) => {
+        const key = (x: string, y: string) => l.axes.map((axis, i) => isCircular(axis)
+            ? displacementOn(l, i, y, x)
+            : Math.sign(relDelta(l, y, x)[i])).join(",");
+        const [a, b, x, y] = c.pairs;
+        const first = key(a, b);
+        const second = key(x, y);
+        const wanted = c.claimSame ? first : first.split(",").map((v, i) =>
+            isCircular(l.axes[i]) ? mod(-Number(v), l.axes[i].modulus!) : -Number(v)).join(",");
+        return second === wanted;
     };
+    const analogyBites = (c: { pairs: [string, string, string, string]; claimSame: boolean }) =>
+        !mutated || readings.every(r => analogyHeld(r, c) !== analogyHeld(layout, c));
+    /** The same claim's truth under every misreading as under the real one. */
+    const analogyStays = (c: { pairs: [string, string, string, string]; claimSame: boolean }) =>
+        readings.every(r => analogyHeld(r, c) === analogyHeld(layout, c));
+
+    /*
+     * Positions are the sum of the stated steps on a bridged layout too — the
+     * bridge is one more step, of a derived size — so its derivation can be
+     * shown. Only operations that set coordinates directly make a walk lie.
+     */
+    const coupled = coupling.lures != null || !!layout.couplings?.length;
+
+    /*
+     * Where a false wide claim may lie on a coupled item: on an axis the
+     * bridge decides, saying what a misreading of it would say. Undefined on
+     * every other item, which keeps the lie anywhere.
+     */
+    const liesFor = (a: string, b: string) => coupled
+        ? layout.axes.flatMap((_, i) => axisBites(a, b, i)
+            ? readings.map(r => ({ axis: i, value: relDelta(r, a, b)[i] }))
+                // A claim states a direction, so a misreading that differs only
+                // in distance would print the true clause and call it a lie.
+                .filter(l => Math.sign(l.value) !== Math.sign(relDelta(layout, a, b)[i]))
+            : [])
+        : undefined;
+    const rewritten = mutated && !coupled;
+
+    /*
+     * The derivation for the forms that ask a whole relation — built claims, a
+     * choice between two, an analogy. They had none, so a wrong answer on them
+     * opened nothing; and since a coupled item displaces reports and testimony,
+     * whose lines were the only ones such items ever carried, a bridge, a clock
+     * or a kind item explained nothing at all.
+     *
+     * The walk goes where the item turns. On a coupled item, every axis the
+     * coupling decides for this pair, since that is what a wrong answer
+     * misread. On a plain one, a single axis the pair differs on — `prefer`
+     * when the caller knows which matters — as the worked example the other
+     * axes repeat. Never on a rewritten layout, for the reason the boolean form
+     * gives at the end.
+     */
+    const explainPair = (l: NdLayout, a: string, b: string, prefer?: number): string[] => {
+        if (rewritten) return [];
+        const axes = l.axes.map((_, i) => i);
+        if (coupled && l === layout) {
+            const focus = axes.filter(i => axisBites(a, b, i));
+            return explainNdPair(l, a, b, focus.length ? focus : [coupling.axis ?? prefer ?? 0]);
+        }
+        const d = relDelta(l, a, b);
+        const order = [...(prefer != null ? [prefer] : []),
+            ...axes.filter(i => i !== prefer && d[i] !== 0), ...axes.filter(i => i !== prefer && d[i] === 0)];
+        const walkable = order.find(i => explainNdAxis(l, b, a, i).length);
+        return walkable == null ? [] : explainNdPair(l, a, b, [walkable]);
+    };
+    /** Both relations of an analogy, then whether they point as claimed. */
+    const explainAnalogy = (c: { pairs: [string, string, string, string]; claimSame: boolean; isValid: boolean }): string[] => {
+        const [a, b, x, y] = c.pairs;
+        // "a to b" is b's place relative to a, as `analogyHeld` keys it.
+        const first = explainPair(layout, b, a), second = explainPair(layout, y, x);
+        if (!first.length || !second.length) return [];
+        return [...first, ...second,
+            `so ${subj(a)} to ${subj(b)} and ${subj(x)} to ${subj(y)} ${c.isValid ? "" : `do ${hi("not")} `}`
+            + `point ${c.claimSame ? "the same way" : "opposite ways"} on every dimension.`];
+    };
+
+    /** Relations the answer composes: the tree distance, or through a bridge. */
+    const depthOf = (a: string, b: string, axis?: number) => coupled
+        ? ndPairDepth(layout, a, b, axis)
+        : graphDistance(a, b, layout.neighbors);
+
+    /*
+     * A pair to ask about. On a coupled layout only a pair the bridge decides
+     * can carry the item, and those are few enough that drawing from the
+     * diameter and hoping finds none; so the biting pairs are listed, and the
+     * deepest of them taken, widening by `slack` as the diameter draw does.
+     */
+    const pickPair = (slack: number): [string, string] | null => {
+        if (!coupled) return pickDistantPairNd(layout, 2, slack, legacy, true);
+        const live: Array<[string, string]> = [];
+        for (const a of layout.words) {
+            for (const b of layout.words) {
+                if (a < b && graphDistance(a, b, layout.neighbors) >= 2 && pairBites(a, b)) live.push([a, b]);
+            }
+        }
+        if (!live.length) return null;
+        /*
+         * The answer class first, then a pair that has it. Rejecting the whole
+         * draw when no pair does is deliberate: settling for another class
+         * would put the skew straight back.
+         */
+        if (coupling.balance != null) {
+            const ax = coupling.balance;
+            const want = [-1, 0, 1][Math.floor(Math.random() * 3)];
+            const fits = live.filter(([a, b]) => Math.sign(layout.coords[a][ax] - layout.coords[b][ax]) === want);
+            if (!fits.length) return null;
+            live.splice(0, live.length, ...fits);
+        }
+        const deepest = Math.max(...live.map(p => depthOf(p[0], p[1])));
+        const band = live.filter(p => depthOf(p[0], p[1]) >= deepest - slack);
+        const chosen = band[Math.floor(Math.random() * band.length)];
+        return coinFlip() ? chosen : [chosen[1], chosen[0]];
+    };
+
+    /*
+     * Facing is asked first, or it is never asked at all.
+     *
+     * It sat below analogy, the checkpoint, construction and choice, and every
+     * one of those returns before reaching it — so from the analogy rung on, a
+     * player holding facing was charged 1.8 for it on every item and shown it on
+     * none (measured: 300/300 items carried a facing premise up to testimony,
+     * 0/300 from analogy on). The facing claim is a question form of its own and
+     * cannot share an item with those, so where any of them is live the two take
+     * turns; where none is, facing is what the item asks.
+     *
+     * Whether it landed is recorded either way, so an item that went to another
+     * form is not priced as though it carried a facing.
+     */
+    if (feat.facing) {
+        question.undelivered.push("facing", ...(feat.twins ? ["mirror-twins"] : []),
+            ...(feat.heading ? ["heading"] : []));
+        const rivals = feat.analogy || feat.chooseConclusion || feat.constructConclusion
+            || (feat.checkpoint && canCheckpoint);
+        const built = (!rivals || coinFlip() || feat.favourHeading) && !mutated
+            ? fillFacingConclusion(question, layout, extraPremises, feat.twins, feat.heading)
+            : false;
+        // Drawn for its head, so a flat facing is the item it was drawn away from.
+        if (feat.favourHeading && built !== "heading" && !lastChance) return false;
+        if (built) {
+            // A heading item is a facing item too; a planar one leaves heading uncharged.
+            question.undelivered = question.undelivered
+                .filter(r => r !== "facing" && r !== "mirror-twins" && (r !== "heading" || built !== "heading"));
+            return true;
+        }
+        // Falling through rather than failing: a layout can simply have no
+        // pair the bearing plane separates, and that is not an error.
+    }
 
     /*
      * Analogy stands in for the axis claim rather than replacing an answer
@@ -625,6 +1123,7 @@ export function fillNdConclusion(ctx: GeneratorContext,
             question.answerMode = "choice";
             question.isValid = true;
             question.conclusion = "";
+            question.explanation = explainAnalogy(set[0]);
             return true;
         }
 
@@ -648,7 +1147,18 @@ export function fillNdConclusion(ctx: GeneratorContext,
             const buildSet = (allTrue: boolean) => {
                 const wants = Array(count).fill(true);
                 if (!allTrue) wants[Math.floor(Math.random() * count)] = false;
-                const set = buildNdAnalogySet(layout, wants, analogyBites);
+                /*
+                 * On a coupled item the set's answer must turn on the bridge
+                 * for every misreading. True set: one claim the bridge decides
+                 * is enough, as anywhere. False set: the false claim must be
+                 * one the bridge decides, and the true ones must *not* be —
+                 * otherwise a misreader sees some true claim go false, calls
+                 * the set false, and is right without having read the bridge.
+                 */
+                const set = buildNdAnalogySet(layout, wants, analogyBites, coupled
+                    ? i => (!wants[i] || (allTrue && i === 0) ? analogyBites
+                        : allTrue ? undefined : analogyStays)
+                    : undefined);
                 return set.length === count ? set : null;
             };
             const yes = buildSet(true), no = buildSet(false);
@@ -657,6 +1167,14 @@ export function fillNdConclusion(ctx: GeneratorContext,
             const allTrue = coinFlip();
             question.conclusion = (allTrue ? yes : no).map(c => c.text);
             question.isValid = allTrue;
+            /*
+             * The claim that decides the set: the false one when there is one,
+             * otherwise the first — on a coupled item, the one built to need the
+             * coupling. Every claim in full would be a page.
+             */
+            const deciding = allTrue ? 0 : no.findIndex(c => !c.isValid);
+            const why = explainAnalogy((allTrue ? yes : no)[deciding]);
+            if (why.length) question.explanation = [`Claim ${deciding + 1}:`, ...why];
             return true;
         }
 
@@ -668,6 +1186,7 @@ export function fillNdConclusion(ctx: GeneratorContext,
         const claim = options[coinFlip() ? 0 : 1]!;
         question.conclusion = claim.text;
         question.isValid = claim.isValid;
+        question.explanation = explainAnalogy(claim);
         return true;
     };
 
@@ -718,8 +1237,8 @@ export function fillNdConclusion(ctx: GeneratorContext,
     if (feat.checkpoint && canCheckpoint && numOfPremises > 4) {
         const half = Math.floor(numOfPremises / 2);
         const early = ndPrefixLayout(layout, half);
-        const earlyPair = pickDistantPairNd(early, 2, 0, legacy);
-        const latePair = pickDistantPairNd(layout, 2, 0, legacy);
+        const earlyPair = pickDistantPairNd(early, 2, 0, legacy, true);
+        const latePair = pickDistantPairNd(layout, 2, 0, legacy, true);
 
         if (earlyPair && latePair && pairBites(latePair[0], latePair[1])) {
             const first = buildNdConstructClaim(early, earlyPair[0], earlyPair[1], false);
@@ -737,6 +1256,11 @@ export function fillNdConclusion(ctx: GeneratorContext,
 
             question.depth = graphDistance(latePair[0], latePair[1], layout.neighbors);
             question.construct = [first, last];
+            const early_ = explainPair(early, earlyPair[0], earlyPair[1]);
+            const late_ = explainPair(layout, latePair[0], latePair[1]);
+            if (early_.length && late_.length) {
+                question.explanation = [`From the first ${half}:`, ...early_, "From all of them:", ...late_];
+            }
             question.answerMode = "construct";
             question.isValid = true;
             question.conclusion = "";
@@ -749,15 +1273,15 @@ export function fillNdConclusion(ctx: GeneratorContext,
         // why the minimum rather than the maximum.
         let shallowest = Infinity;
         const claims = buildConstructClaims(ctx, slack => {
-            const pair = pickDistantPairNd(layout, 2, slack, legacy);
+            const pair = pickPair(slack);
             if (!pair || !pairBites(pair[0], pair[1])) return null;
-            shallowest = Math.min(
-                shallowest, graphDistance(pair[0], pair[1], layout.neighbors));
+            shallowest = Math.min(shallowest, depthOf(pair[0], pair[1]));
             return buildNdConstructClaim(layout, pair[0], pair[1], feat.constructDistance);
         }, numOfPremises);
         if (!claims.length) return false;
         question.depth = Number.isFinite(shallowest) ? shallowest : 0;
         question.construct = claims;
+        question.explanation = claims.flatMap(c => explainPair(layout, c.a, c.b));
         question.answerMode = "construct";
         question.isValid = true;
         question.conclusion = "";
@@ -779,17 +1303,21 @@ export function fillNdConclusion(ctx: GeneratorContext,
          * premises. The ability model reads the option count, so it scores these
          * as the weaker evidence they are.
          */
-        const pair = pickDistantPairNd(layout, 2, 0, legacy);
+        const pair = pickPair(0);
         if (!pair || !pairBites(pair[0], pair[1])) return false;
 
         const strictPick = feat.indeterminate || feat.speakers || feat.testimony;
         const right = buildNdWideConclusion(layout, pair[0], pair[1], true, strictPick)
             ?? buildNdConclusion(layout, pair[0], pair[1], 0, true);
-        const wrong = buildNdWideConclusion(layout, pair[0], pair[1], false, strictPick)
+        const wrong = buildNdWideConclusion(layout, pair[0], pair[1], false, strictPick,
+            liesFor(pair[0], pair[1]))
             ?? buildNdConclusion(layout, pair[0], pair[1], 0, false);
         if (!right || !wrong || right.text === wrong.text) return false;
 
-        question.depth = graphDistance(pair[0], pair[1], layout.neighbors);
+        question.depth = depthOf(pair[0], pair[1]);
+        // Walked on the axis the wrong option lies about, which is the one to check.
+        const why = explainPair(layout, pair[0], pair[1], wrong.axis >= 0 ? wrong.axis : undefined);
+        if (why.length) question.explanation = [...why, `so it is \u201c${right.text}\u201d.`];
         const order = shuffle([right.text, wrong.text]);
         question.choices = order;
         question.correctChoice = order.indexOf(right.text);
@@ -801,23 +1329,13 @@ export function fillNdConclusion(ctx: GeneratorContext,
 
 
     /*
-     * Egocentric items re-express the layout from inside it, so they are their
-     * own branch: the claim is not about an axis at all.
-     */
-    if (feat.facing) {
-        const built = fillFacingConclusion(question, layout, extraPremises, feat.twins);
-        if (built) return true;
-        // Falling through rather than failing: a layout can simply have no
-        // pair the bearing plane separates, and that is not an error.
-    }
-
-    /*
      * Several claims, each of them about every axis.
      *
-     * Placed here rather than above `facing` and `indeterminate` on purpose.
-     * Those two change *what is asked* — a bearing from inside the layout, a
-     * claim of necessity over a pair nothing settles — and running before them
-     * meant an item that had earned either simply never got it. Several claims
+     * Placed here rather than above `indeterminate` on purpose, and below
+     * `facing` for the same reason. Those change *what is asked* — a bearing
+     * from inside the layout, a claim of necessity over a pair nothing settles
+     * — and running before them meant an item that had earned either simply
+     * never got it. Several claims
      * changes *how many* are asked, which composes with the plain form and with
      * nothing else, so it sits with the plain form.
      *
@@ -840,19 +1358,21 @@ export function fillNdConclusion(ctx: GeneratorContext,
         const claims: NdConclusion[] = [];
         const used = new Set<string>();
 
-        if (legacy) {
+        // Not on a coupled item, whose claims must each need the bridge — the
+        // legacy draw takes any pair on any axis.
+        if (legacy && !coupled) {
             // Off, this is what it was: one axis per claim, chosen at random.
             claims.push(...buildNdConclusionSet(layout, count, wants, true));
         } else {
             for (let guard = 0; claims.length < count && guard < count * 40; guard++) {
-                const pair = pickDistantPairNd(layout, 2, claims.length, false);
+                const pair = coupled ? pickPair(claims.length) : pickDistantPairNd(layout, 2, claims.length, false);
                 if (!pair || !pairBites(pair[0], pair[1])) continue;
 
                 const key = [...pair].sort().join(" ");
                 if (used.has(key)) continue;
 
                 const wide = buildNdWideConclusion(
-                    layout, pair[0], pair[1], wants[claims.length], strictSet);
+                    layout, pair[0], pair[1], wants[claims.length], strictSet, liesFor(pair[0], pair[1]));
                 if (!wide) continue;
 
                 used.add(key);
@@ -874,7 +1394,7 @@ export function fillNdConclusion(ctx: GeneratorContext,
             // Every claim has to be answered, so the cheapest is what the item
             // can be answered from at its easiest.
             question.depth = Math.min(
-                ...claims.map(c => graphDistance(c.a, c.b, layout.neighbors)));
+                ...claims.map(c => depthOf(c.a, c.b)));
             question.series = claims.map((c, i) => ({ text: c.text, isValid: wants[i] }));
             question.conclusion = claims[0].text;
             question.isValid = wants[0];
@@ -884,9 +1404,12 @@ export function fillNdConclusion(ctx: GeneratorContext,
              * premises no longer describe where things ended up, so a walk
              * through them would be confidently wrong.
              */
-            if (!mutated) {
+            if (!rewritten) {
                 question.explanation = claims.flatMap((c, i) => [
-                    ...explainNdAxis(layout, c.b, c.a, Math.max(0, c.axis)),
+                    // A true claim turns on every axis; on a bridged item the
+                    // one worth walking is the one the bridge decides.
+                    ...explainNdAxis(layout, c.b, c.a,
+                        c.axis >= 0 ? c.axis : coupling.axis ?? 0),
                     wants[i] ? `so claim ${i + 1} holds.`
                         : `so claim ${i + 1} does ${hi("not")} hold.`,
                 ]);
@@ -941,7 +1464,7 @@ export function fillNdConclusion(ctx: GeneratorContext,
     let axisIndex = -1;
     for (let slack = 0; slack <= 2 && axisIndex < 0; slack++) {
         for (let attempt = 0; attempt < 8 && axisIndex < 0; attempt++) {
-            const candidate = pickDistantPairNd(layout, 2, slack, legacy);
+            const candidate = pickPair(slack);
             if (!candidate) break;
             /*
              * Draw the axis from the ones the operations actually reached,
@@ -976,9 +1499,10 @@ export function fillNdConclusion(ctx: GeneratorContext,
     const strict = feat.indeterminate || feat.speakers || feat.testimony;
     // Off, the claim names one axis of however many — which is the other half
     // of what the switch turns off, and the half a player would notice first.
-    const c = (legacy ? null : buildNdWideConclusion(layout, pair[0], pair[1], coinFlip(), strict))
+    const c = (legacy && !coupled ? null
+        : buildNdWideConclusion(layout, pair[0], pair[1], coinFlip(), strict, liesFor(pair[0], pair[1])))
         ?? buildNdConclusion(layout, pair[0], pair[1], axisIndex, coinFlip());
-    question.depth = graphDistance(pair[0], pair[1], layout.neighbors);
+    question.depth = depthOf(pair[0], pair[1], c.axis >= 0 ? c.axis : axisIndex);
     asked.a = c.a;
     asked.b = c.b;
     // A wide claim turns on the axis it lies about; a true one turns on all of
@@ -993,7 +1517,7 @@ export function fillNdConclusion(ctx: GeneratorContext,
      * transformations set coordinates directly, so the same walk would
      * produce a confident and wrong derivation. Silence beats that.
      */
-    if (!mutated) question.explanation = explainNdAxis(layout, c.b, c.a, axisIndex);
+    if (!rewritten) question.explanation = explainNdAxis(layout, c.b, c.a, axisIndex);
     return true;
 }
 
@@ -1010,17 +1534,81 @@ export function ndSetup(ctx: GeneratorContext,
     feat: ReturnType<typeof ndFeatures>,
     edited: boolean,
     transformed: boolean,
+    coupled: {
+        bridged?: boolean;
+        clocked?: { layout: NdLayout; reading: "station" | "local" };
+        coned?: NdLayout;
+        kinded?: NdLayout;
+        walked?: boolean;
+        neared?: boolean;
+        ranked?: NdLayout;
+    } = {},
 ): string[] {
+    const bridged = !!coupled.bridged || !!coupled.walked || !!coupled.ranked;
     const loops = axes.filter(a => isCircular(a));
     const lines: string[] = [];
-    if (feat.constructDistance) lines.push(ONE_STEP_NOTE);
+    /*
+     * Always, not only when a distance is asked for. Judging a direction never
+     * needed it, but every coupling rung turns on magnitudes — a bridge's size
+     * is a derived gap, the shear adds a position to a time — and none of that
+     * is derivable unless each premise is known to be worth exactly one step.
+     */
+    // A cone item states time in minutes, and says so in the same breath.
+    lines.push(coupled.coned ? ONE_STEP_MINUTES_NOTE : ONE_STEP_NOTE);
     /*
      * The compact convention has to be stated or the item is not derivable:
      * without it, an axis left out is indistinguishable from an axis with
      * no difference, and the conclusion may ask about exactly that axis.
      */
     if (feat.compact) lines.push(COMPACT_NOTE);
-    if (feat.indeterminate) lines.push(INDETERMINATE_NOTE);
+    // A ranked item asks a claim of necessity whether or not the rung that
+    // introduces them is held, so it states what one means either way.
+    if (feat.indeterminate || coupled.ranked) lines.push(INDETERMINATE_NOTE);
+    /*
+     * A bridged item leaves a clause out whether or not the indeterminate rung
+     * is held, so the reading of an omission is stated with it either way.
+     */
+    if (feat.indeterminate || bridged) lines.push(UNNAMED_NOTE);
+    if (coupled.bridged) lines.push(BRIDGE_NOTE);
+    if (coupled.walked) lines.push(WALK_NOTE(axes.some(a => isCircular(a) || isParity(a))));
+    if (coupled.ranked) {
+        const o = rankOrder(axes)!;
+        const [key, tie] = [axes[o.key].scale, axes[o.tie].scale];
+        const first = (scale: typeof key, dir: number) => rel(scale.direction[dir > 0 ? 1 : 0]);
+        lines.push(RANK_NOTE(key.name.toLowerCase(), first(key, o.keyDir),
+            tie.name.toLowerCase(), first(tie, o.tieDir), rel(key.tie), rel(tie.tie)));
+    }
+    if (coupled.neared) lines.push(NEAREST_NOTE(axes.some(a => isParity(a)), axes.some(a => isCircular(a))));
+    if (coupled.clocked) lines.push(...clockNotes(coupled.clocked.layout, coupled.clocked.reading));
+    if (coupled.coned) {
+        const cone = coneAxes(coupled.coned.axes)!;
+        const pair = (i: number) => `${rel(axes[i].scale.direction[0])}\u2013${rel(axes[i].scale.direction[1])}`;
+        const travel = cone.space.map(pair);
+        const listed = travel.length > 1 ? `${travel.slice(0, -1).join(", ")} or ${travel[travel.length - 1]}` : travel[0];
+        // The other axes are named as not counting, so a reader does not
+        // spend minutes on growing or shrinking.
+        const others = axes.map((_, i) => i).filter(i => i !== cone.time && !cone.space.includes(i));
+        const inert = others.length
+            ? `; ${others.map(i => axes[i].scale.name.toLowerCase()).join(" and ")} cost no travel`
+            : "";
+        lines.push(CONE_NOTE(listed, inert));
+        if (coupled.coned.edges.some(e => e.form === "signal")) lines.push(SIGNAL_NOTE);
+        if (coupled.coned.edges.some(e => e.form === "reach")) lines.push(REACH_NOTE);
+    }
+    if (coupled.kinded) {
+        const f = coupled.kinded.frames!;
+        const [x, y] = f.axes.map(i => axes[i]);
+        const p = axes[f.parity].scale.parity!;
+        lines.push(KIND_NOTE(
+            f.rule === "mirror"
+                ? `what one kind calls ${rel(x.scale.direction[0])} the other calls`
+                  + ` ${rel(x.scale.direction[1])}, and the reverse`
+                : `what one kind calls ${rel(x.scale.direction[0])} the other calls`
+                  + ` ${rel(y.scale.direction[0])}, ${rel(x.scale.direction[1])} is`
+                  + ` ${rel(y.scale.direction[1])}, and ${rel(x.scale.tie)} is ${rel(y.scale.tie)}`
+                  + ` \u2014 and the reverse`,
+            rel(p.same), rel(p.opposite)));
+    }
     if (feat.facing) lines.push(FACING_NOTE);
     if (feat.twins) lines.push(MIRROR_NOTE);
     if (feat.speakers) lines.push(SPEAKERS_NOTE);
@@ -1051,6 +1639,35 @@ export function ndSetup(ctx: GeneratorContext,
     return lines;
 }
 
+
+/**
+ * What a clocked item has to say about its clocks.
+ *
+ * The rule, the mark, and which clock the question uses — none of which the
+ * premises convey. On a looped east axis the date line is stated with the
+ * jump it causes, because a ring of zones implies a day of that many steps
+ * and nobody should have to infer it.
+ */
+function clockNotes(layout: NdLayout, reading: "station" | "local"): string[] {
+    const clock = clockAxes(layout)!;
+    const time = layout.axes[clock.target].scale;
+    const east = layout.axes[clock.source];
+    const lines = [CLOCK_NOTE(rel(east.scale.direction[0]), rel(time.direction[0]))];
+    if (isCircular(east)) {
+        const m = east.modulus!;
+        const round = rel(east.scale.cyclic!.direction[0]);
+        lines[0] = `Clocks are <b>local</b>. The loop is <b>${m} zones</b>, numbered 1 to ${m}`
+            + ` going ${round} from the <b>date line</b>, and a clock in zone k reads k steps`
+            + ` ${rel(time.direction[0])} than the station clock \u2014 so crossing the date line`
+            + ` going ${round} sets a clock back ${m - 1} steps. Premises marked`
+            + ` <b>by local clocks</b> give each time as read where that thing is; the rest`
+            + ` use the station clock.`;
+    }
+    lines.push(reading === "station"
+        ? "Answer <b>by the station clock</b>."
+        : "Answer <b>by local clocks</b>: each time as read where that thing is.");
+    return lines;
+}
 
 /** A claim of necessity rather than of fact. */
 function mustBe(text: string): string {
@@ -1095,7 +1712,9 @@ function fillFacingConclusion(
     layout: NdLayout,
     extraPremises: string[],
     twins = false,
-): boolean {
+    heading = false,
+): "heading" | "planar" | false {
+    if (heading && fillHeadingConclusion(question, layout, extraPremises, twins)) return "heading";
     const plane = bearingPlane(layout.axes);
     if (!plane || layout.words.length < 3) return false;
 
@@ -1111,8 +1730,16 @@ function fillFacingConclusion(
             if (faced === viewer) continue;
             const f = sub(at(faced), at(viewer));
             if (!f[0] && !f[1]) continue;
+            /*
+             * Only bearings the reader can actually take. Under-specification
+             * and the speaker rungs leave some pairs unsettled on purpose, and a
+             * facing toward an object whose position is open names a direction
+             * nobody can derive.
+             */
+            if (!plane.every(ax => determinedOn(layout, ax, viewer, faced))) continue;
             for (const target of layout.words) {
                 if (target === viewer || target === faced) continue;
+                if (!plane.every(ax => determinedOn(layout, ax, viewer, target))) continue;
                 const rel = egocentric(f, sub(at(target), at(viewer)));
                 if (rel) options.push({ viewer, faced, target, rel });
             }
@@ -1161,6 +1788,382 @@ function fillFacingConclusion(
                 + ` side the other one`,
                `so ${describeEgocentric(chosen.target, chosen.viewer, spoken)}`]
             : [`so ${describeEgocentric(chosen.target, chosen.viewer, chosen.rel)}`]),
+    ];
+    return "planar";
+}
+
+/**
+ * "Counting every step on every dimension, which is nearer to F?"
+ *
+ * Two options, as every choice in the app is — a longer menu is searched, not
+ * judged. The right one is nearer by the walking total; the other is the one
+ * the per-axis stand-ins prefer: none of fewest dimensions differing, the
+ * smallest longest leg, or fewest premises apart picks the right one, and at
+ * least two of them pick the wrong one outright. An item any shortcut answers
+ * is not asking for the total.
+ */
+function fillNearestConclusion(question: Question, layout: NdLayout): boolean {
+    for (const anchor of shuffle([...layout.words])) {
+        const others = layout.words.filter(w => w !== anchor);
+        for (let t = 0; t < 20; t++) {
+            const trio = shuffle([...others]).slice(0, 2);
+            if (trio.length < 2) return false;
+            const [p, q] = trio.map(w => walkDistance(layout, anchor, w));
+            if (p === q) continue;
+            const right = p < q ? trio[0] : trio[1];
+            const wrong = right === trio[0] ? trio[1] : trio[0];
+            // Which of the pair a stand-in prefers: -1 the right one, 1 the
+            // wrong one, 0 a tie.
+            const prefers = (f: (w: string) => number) => Math.sign(f(right) - f(wrong));
+            const stand = [
+                prefers(w => walkLures(layout, anchor, w).hamming),
+                prefers(w => walkLures(layout, anchor, w).widest),
+                prefers(w => graphDistance(anchor, w, layout.neighbors)),
+            ];
+            if (stand.includes(-1) || stand.filter(x => x === 1).length < 2) continue;
+
+            question.choices = trio.map(w => subj(w));
+            question.correctChoice = trio.indexOf(right);
+            question.answerMode = "choice";
+            question.choicePrompt = `Counting every step on every dimension, which is nearer to ${subj(anchor)}?`;
+            question.isValid = true;
+            question.conclusion = "";
+            question.depth = Math.max(...trio.map(w => graphDistance(anchor, w, layout.neighbors)));
+            const colors = ndAxisColors(layout.axes);
+            question.explanation = [
+                ...trio.map(w => {
+                    const legs = layout.axes.map((axis, i) => ({ axis, i, d: layout.coords[w][i] - layout.coords[anchor][i] }))
+                        .filter(l => !isParity(l.axis) && (isCircular(l.axis) ? displacementOn(layout, l.i, w, anchor) : l.d) !== 0)
+                        .map(l => isCircular(l.axis)
+                            ? hi(`${Math.min(displacementOn(layout, l.i, w, anchor), l.axis.modulus! - displacementOn(layout, l.i, w, anchor))} round`, colors[l.i])
+                            : hi(`${Math.abs(l.d)} ${l.d > 0 ? l.axis.scale.direction[0] : l.axis.scale.direction[1]}`, colors[l.i]));
+                    return `${subj(w)} is ${legs.join(", ")} from ${subj(anchor)}: ${walkDistance(layout, anchor, w)} steps in all.`;
+                }),
+                `so ${subj(right)} is nearer`,
+            ];
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * A claim of necessity about the tiebreak, across the cut.
+ *
+ * The pair is one the informative ranking settles strictly and nothing else
+ * settles at all: with the rankings ignored it is open. Reading every ranking
+ * as a tiebreak statement — the idle one too — must give the opposite answer
+ * or a contradiction, or the idle ranking is decoration. A false claim says
+ * what that misreading says.
+ */
+function fillRankedConclusion(question: Question, layout: NdLayout, wantTrue: boolean): boolean {
+    const o = rankOrder(layout.axes)!;
+    const T = o.tie;
+    const axis = layout.axes[T];
+    const color = ndAxisColors(layout.axes)[T];
+    const sign = (b: { lo: number; hi: number } | null) => !b ? null : b.lo >= 1 ? 1 : b.hi <= -1 ? -1 : 0;
+
+    // Never a ranking's own pair: the answer would be one premise, read off.
+    const ranked = new Set((layout.couplings ?? []).filter((c): c is NdRank => c.kind === "rank")
+        .flatMap(c => [`${c.a} ${c.b}`, `${c.b} ${c.a}`]));
+    const options: Array<{ p: string; q: string; truth: number }> = [];
+    for (const p of layout.words) for (const q of layout.words) {
+        if (p === q || ranked.has(`${p} ${q}`)) continue;
+        if (determinedOn(layout, T, p, q) || graphDistance(p, q, layout.neighbors) < 2) continue;
+        const truth = sign(boundsOn(layout, T, p, q));
+        if (truth == null || truth === 0) continue;
+        const misread = boundsOn(layout, T, p, q, "all");
+        if (misread && sign(misread) !== -truth) continue;
+        options.push({ p, q, truth });
+    }
+    if (!options.length) return false;
+    const { p, q, truth } = options[Math.floor(Math.random() * options.length)];
+    const said = wantTrue ? truth : -truth;
+    const word = said > 0 ? axis.scale.above : axis.scale.below;
+
+    question.conclusion = mustBe(`${subj(p)} ${rel(word, color)} ${subj(q)}`);
+    question.isValid = wantTrue;
+    question.depth = graphDistance(p, q, layout.neighbors) + 1;
+
+    const key = layout.axes[o.key];
+    const keyColor = ndAxisColors(layout.axes)[o.key];
+    const bounds = boundsOn(layout, T, p, q)!;
+    question.explanation = [
+        ...(layout.couplings ?? []).filter((c): c is NdRank => c.kind === "rank").map(c => {
+            const k = layout.coords[c.a][o.key] - layout.coords[c.b][o.key];
+            if (k === 0) {
+                const lower = o.tieDir > 0 ? axis.scale.below : axis.scale.above;
+                return `${subj(c.a)} and ${subj(c.b)} are at the ${hi(key.scale.tie, keyColor)}, so`
+                    + ` \u201c${subj(c.a)} is listed before ${subj(c.b)}\u201d means ${subj(c.a)}`
+                    + ` ${rel(lower, color)} ${subj(c.b)}.`;
+            }
+            return `${subj(c.a)} ${rel(k < 0 ? key.scale.below : key.scale.above, keyColor)} ${subj(c.b)},`
+                + ` so \u201c${subj(c.a)} is listed before ${subj(c.b)}\u201d is explained by`
+                + ` ${hi(key.scale.name, keyColor)} and says nothing about ${hi(axis.scale.name, color)}.`;
+        }),
+        truth > 0
+            ? `so, with the rest of the premises, ${subj(p)} is at least ${bounds.lo} ${bounds.lo === 1 ? axis.scale.unit : axis.scale.unit + "s"}`
+              + ` ${hi(axis.scale.direction[0], color)}${axis.scale.link ? " " + axis.scale.link : ""} ${subj(q)}`
+            : `so, with the rest of the premises, ${subj(p)} is at least ${-bounds.hi} ${-bounds.hi === 1 ? axis.scale.unit : axis.scale.unit + "s"}`
+              + ` ${hi(axis.scale.direction[1], color)}${axis.scale.link ? " " + axis.scale.link : ""} ${subj(q)}`,
+    ];
+    return true;
+}
+
+/** "X's ring can have reached Y by the moment Y rang." */
+export function coneClaim(x: string, y: string): string {
+    return `${subj(x)}'s ring can have reached ${subj(y)} by the moment ${subj(y)} rang`;
+}
+
+/** How far the real times on the route sit past what its reach bounds say. */
+function routeSlack(layout: NdLayout, x: string, y: string): number {
+    const cone = coneAxes(layout.axes)!;
+    let slack = 0;
+    let cur = x;
+    for (const step of routePath(layout, x, y).slice(1)) {
+        const e = layout.edges.find(e => (e.from === cur && e.to === step) || (e.to === cur && e.from === step))!;
+        if (e.form === "reach") {
+            const dt = (e.from === cur ? 1 : -1) * e.deltas[cone.time];
+            slack += Math.sign(dt) * (Math.abs(dt) - edgeSteps(layout, e));
+        }
+        cur = step;
+    }
+    return slack;
+}
+
+/**
+ * Whether `x`'s ring can have reached `y` in time, and what each shortcut says.
+ *
+ * The shortcuts are the ones the cone exists to defeat: checking each travel
+ * axis against the time on its own (the per-axis, Chebyshev reading), summing
+ * every premise's steps instead of the straight distance (the route reading),
+ * and taking "later" as enough (the time-only reading). On a reach item each
+ * is read against whichever bound is finite, as the reader must.
+ */
+function coneVerdict(layout: NdLayout, kind: "cone" | "signal" | "reach", x: string, y: string) {
+    const cone = coneAxes(layout.axes)!;
+    const need = travelSteps(layout, x, y);
+    const widest = Math.max(...cone.space.map(i => Math.abs(layout.coords[y][i] - layout.coords[x][i])));
+    const route = routeSteps(layout, x, y);
+    const { lo, hi } = kind === "reach"
+        ? timeBounds(layout, x, y)
+        : { lo: layout.coords[y][cone.time] - layout.coords[x][cone.time],
+            hi: layout.coords[y][cone.time] - layout.coords[x][cone.time] };
+    /*
+     * By necessity, as the reach note says: true only if it holds however
+     * late the bounded bells rang. A pair the bounds leave open is therefore
+     * false, not unaskable — and that is the case that tells a reader who
+     * takes "only after" as "the moment" from one who does not: at the
+     * bound's own edge the ring arrives, and a minute later it may not.
+     */
+    const truth = lo >= need;
+    return {
+        truth, need, lo, hi,
+        boundAsEquality: (kind === "reach"
+            ? layout.coords[y][cone.time] - layout.coords[x][cone.time]
+              - routeSlack(layout, x, y)
+            : lo) >= need,
+        // Each shortcut judged by necessity too: what holds at every slack is
+        // what holds at the lower bound.
+        perAxis: lo >= widest,
+        route: lo >= route,
+        timeOnly: lo >= 0,
+    };
+}
+
+/**
+ * The light-cone question, as the item's whole conclusion.
+ *
+ * Built here rather than as one more branch of `fillNdConclusion`, which is
+ * the facing bug's lesson: a branch below analogy, construction and choice is
+ * a branch that never runs. The caller hands a cone item straight to this.
+ *
+ * True and false are balanced, and each answer carries its own trap: every
+ * false item passes the per-axis reading and every true one fails the route
+ * reading, so each shortcut is right exactly half the time. And the item's own
+ * premise form has to be on the route asked about, or it is decoration.
+ */
+function fillConeConclusion(
+    question: Question,
+    layout: NdLayout,
+    kind: "cone" | "signal" | "reach",
+    select: boolean,
+    /**
+     * The answer and the trap, decided once per item by the caller. Drawn here
+     * they would be redrawn on every rejected layout, and the draw would drift
+     * towards whichever combination is easiest to build.
+     */
+    want: { yes: boolean; boundTrap: boolean },
+): boolean {
+    const usesForm = (x: string, y: string) => kind === "cone" || routeForms(layout, x, y).includes(kind);
+
+    if (select) {
+        for (const x of shuffle([...layout.words])) {
+            const rows = shuffle(layout.words.filter(y => y !== x))
+                .map(y => ({ y, v: coneVerdict(layout, kind, x, y) }))
+                .filter((r): r is { y: string; v: NonNullable<ReturnType<typeof coneVerdict>> } => !!r.v)
+                .slice(0, 5);
+            if (rows.length < 3) continue;
+            const set = (k: "truth" | "perAxis" | "route" | "timeOnly") =>
+                rows.map(r => (r.v[k] ? "1" : "0")).join("");
+            const truth = set("truth");
+            // Not none, not all, and no shortcut lands on the same subset.
+            if (!truth.includes("1") || !truth.includes("0")) continue;
+            if ((["perAxis", "route", "timeOnly"] as const).some(k => set(k) === truth)) continue;
+            if (rows.filter(r => usesForm(x, r.y)).length < 2) continue;
+
+            question.choices = rows.map(r => subj(r.y));
+            question.selectAnswer = rows.map((r, i) => (r.v.truth ? i : -1)).filter(i => i >= 0);
+            question.selectAsked = true;
+            question.answerMode = "select";
+            question.choicePrompt = `Select every one ${subj(x)}'s ring can have reached by the moment it rang.`;
+            question.isValid = true;
+            question.conclusion = "";
+            question.depth = Math.max(...rows.map(r => graphDistance(x, r.y, layout.neighbors)));
+            question.explanation = rows.flatMap(r => explainCone(layout, kind, x, r.y));
+            return true;
+        }
+        return false;
+    }
+
+    const wantYes = want.yes;
+    /*
+     * And on half of a reach item's "no" answers, the trap is the bound
+     * itself: true at the bound's edge, false a minute past it. A reader who
+     * takes "only after" as "the moment" says yes there, and only there.
+     */
+    const boundTrap = kind === "reach" && !wantYes && want.boundTrap;
+    const options: Array<[string, string]> = [];
+    for (const x of layout.words) {
+        for (const y of layout.words) {
+            if (x === y || graphDistance(x, y, layout.neighbors) < 2 || !usesForm(x, y)) continue;
+            const v = coneVerdict(layout, kind, x, y);
+            if (!v || v.truth !== wantYes) continue;
+            // The bound trap stands in for the per-axis one: across an upper
+            // bound nothing holds at every slack, so a per-axis reader judging
+            // by necessity says no there anyway.
+            if (!wantYes && !boundTrap && !v.perAxis) continue;
+            if (wantYes && v.route) continue;
+            if (boundTrap && !v.boundAsEquality) continue;
+            options.push([x, y]);
+        }
+    }
+    if (!options.length) return false;
+    const [x, y] = options[Math.floor(Math.random() * options.length)];
+
+    question.conclusion = coneClaim(x, y);
+    question.isValid = wantYes;
+    question.depth = graphDistance(x, y, layout.neighbors);
+    question.explanation = explainCone(layout, kind, x, y);
+    return true;
+}
+
+/** Distance, then time, then the comparison — the order the rule is applied in. */
+function explainCone(layout: NdLayout, kind: "cone" | "signal" | "reach", x: string, y: string): string[] {
+    const cone = coneAxes(layout.axes)!;
+    const colors = ndAxisColors(layout.axes);
+    const v = coneVerdict(layout, kind, x, y)!;
+    const legs = cone.space
+        .map(i => ({ i, d: layout.coords[y][i] - layout.coords[x][i] }))
+        .filter(l => l.d !== 0)
+        .map(l => hi(`${Math.abs(l.d)} ${layout.axes[l.i].scale.direction[l.d > 0 ? 0 : 1]}`, colors[l.i]));
+    const steps = (n: number) => `${n} step${n === 1 ? "" : "s"}`;
+    const lines = [
+        legs.length
+            ? `${subj(y)} is ${legs.join(", ")} relative to ${subj(x)}: a ring needs ${steps(v.need)}.`
+            : `${subj(y)} is where ${subj(x)} is: a ring needs no steps.`,
+    ];
+    const when = (n: number) => n > 0 ? `${n} min after` : n < 0 ? `${-n} min before` : "at the same moment as";
+    if (kind === "reach") {
+        lines.push(v.lo === v.hi
+            ? `By the premises ${subj(y)} rang ${when(v.lo)} ${subj(x)} \u2014 no bound lies on the way.`
+            : Number.isFinite(v.lo)
+            ? `By the premises ${subj(y)} rang at least ${when(v.lo)} ${subj(x)}.`
+            : `By the premises ${subj(y)} rang at most ${when(v.hi)} ${subj(x)}.`);
+    } else {
+        lines.push(...explainNdAxis(layout, x, y, cone.time));
+    }
+    const gap = Number.isFinite(v.lo) ? v.lo : v.hi;
+    lines.push(v.truth
+        ? `so ${gap} min is enough for ${steps(v.need)}, and the ring can have arrived in time`
+        : `so ${gap} min is not enough for ${steps(v.need)}, and the ring cannot have arrived in time`);
+    return lines;
+}
+
+/**
+ * "Bell is on Cole's left", where Cole faces Dell and Cole's head points
+ * toward Ash: left and right taken in three dimensions.
+ *
+ * Facing and head are both axis-aligned for now — east, north, up and their
+ * opposites — so the frame is one a person can take: lying on a side, hanging
+ * upside down. Oblique frames are a determinant puzzle more than a
+ * perspective, and are left for a later step.
+ *
+ * Only left or right is asked, which needs no convention: the determinant is
+ * unchanged by taking the head's forward part off. And only where the planar
+ * reading — today's facing skill, the same as assuming the head points up —
+ * gets it wrong or cannot answer at all: an item it answers is a facing item.
+ */
+function fillHeadingConclusion(
+    question: Question,
+    layout: NdLayout,
+    extraPremises: string[],
+    twins: boolean,
+): boolean {
+    const space = bearingSpace(layout.axes);
+    if (!space || layout.words.length < 4) return false;
+    type V3 = [number, number, number];
+    const vec = (a: string, b: string): V3 => space.map(i => layout.coords[b][i] - layout.coords[a][i]) as V3;
+    const aligned = (d: V3) => d.filter(x => x !== 0).length === 1;
+    const settled = (a: string, b: string) => space.every(ax => determinedOn(layout, ax, a, b));
+
+    const options: Array<{ viewer: string; faced: string; head: string; target: string; side: "left" | "right" }> = [];
+    for (const viewer of layout.words) {
+        for (const faced of layout.words) {
+            if (faced === viewer) continue;
+            const f = vec(viewer, faced);
+            if (!aligned(f) || !settled(viewer, faced)) continue;
+            for (const head of layout.words) {
+                if (head === viewer || head === faced) continue;
+                const h = vec(viewer, head);
+                if (!aligned(h) || f.some((x, k) => x !== 0 && h[k] !== 0) || !settled(viewer, head)) continue;
+                for (const target of layout.words) {
+                    if (target === viewer || target === faced || target === head) continue;
+                    const v = vec(viewer, target);
+                    const side = headedSide(f, h, v);
+                    if (!side || !settled(viewer, target)) continue;
+                    // The planar reading: the head taken to point up.
+                    const planar = headedSide(f, [0, 0, 1], v);
+                    if (planar === side) continue;
+                    options.push({ viewer, faced, head, target, side });
+                }
+            }
+        }
+    }
+    if (!options.length) return false;
+
+    const o = options[Math.floor(Math.random() * options.length)];
+    const spoken = twins ? MIRRORED[o.side] : o.side;
+    const claimTrue = coinFlip();
+    const claimed = claimTrue ? spoken : OPPOSITE[spoken];
+
+    const word = (d: V3) => d.map((x, k) => (x === 0 ? "" : `${Math.abs(x)} ${layout.axes[space[k]].scale.direction[x > 0 ? 0 : 1]}`))
+        .filter(Boolean).join(", ") || "nowhere";
+    const way = (d: V3) => { const k = d.findIndex(x => x !== 0); return layout.axes[space[k]].scale.direction[d[k] > 0 ? 0 : 1]; };
+    extraPremises.push(describeFacing(o.viewer, o.faced));
+    extraPremises.push(describeHead(o.viewer, o.head));
+    if (twins) extraPremises.push(describeTwin(o.viewer));
+    question.conclusion = describeEgocentric(o.target, o.viewer, claimed);
+    question.isValid = claimTrue;
+    question.setup.push(HEADING_NOTE);
+    question.explanation = [
+        `From ${subj(o.viewer)}, ${subj(o.faced)} lies ${hi(way(vec(o.viewer, o.faced)))} \u2014 the way ${subj(o.viewer)} faces.`,
+        `${subj(o.viewer)}'s head points toward ${subj(o.head)}, which lies ${hi(way(vec(o.viewer, o.head)))}.`,
+        `From ${subj(o.viewer)}, ${subj(o.target)} lies ${hi(word(vec(o.viewer, o.target)))}.`,
+        ...(twins
+            ? [`so ${describeEgocentric(o.target, o.viewer, o.side)} \u2014 but ${subj(o.viewer)} is a mirror twin, and calls that side the other one`,
+               `so ${describeEgocentric(o.target, o.viewer, spoken)}`]
+            : [`so, facing ${way(vec(o.viewer, o.faced))} with the head ${way(vec(o.viewer, o.head))}, ${describeEgocentric(o.target, o.viewer, o.side)}`]),
     ];
     return true;
 }
@@ -1414,4 +2417,15 @@ function assignTestimony(ctx: GeneratorContext, layout: NdLayout) {
     }
 
     return null;
+}
+
+/** One of `items`, each as likely as its weight. */
+function weightedPick<T>(items: T[], weight: (item: T) => number): T {
+    const weights = items.map(weight);
+    let r = Math.random() * weights.reduce((sum, w) => sum + w, 0);
+    for (let i = 0; i < items.length; i++) {
+        r -= weights[i];
+        if (r < 0) return items[i];
+    }
+    return items[items.length - 1];
 }

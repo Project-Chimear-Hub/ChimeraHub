@@ -118,7 +118,7 @@ var CATALOG = {
       what: "Relations between spoken numbers, places and pitches, by ear, no input" },
     { id: "relations", name: "Relation Algebra", path: "relations/", colour: "#d2a8ff",
       categories: ["rrt", "spatial"], counted: true,
-      what: "Nested relations in space, numbers, notes, days, headings and orientations" },
+      what: "Nested relations in seven materials, and routes on a cube" },
   ],
 
   /* Where "submit one" goes. A link the player follows, not a request the

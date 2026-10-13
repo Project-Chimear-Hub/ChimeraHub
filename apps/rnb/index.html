@@ -66,6 +66,7 @@
           <label><input type="checkbox" data-coord="color"> Colour</label>
           <label><input type="checkbox" data-coord="size"> Size</label>
           <label><input type="checkbox" data-coord="quantity"> Quantity</label>
+          <label><input type="checkbox" data-coord="glyph"> Glyph</label>
         </div>
         <div class="hint">Each becomes a <b>coordinate of the move</b> rather than a
           stream beside it. There are as many mutually orthogonal directions as
@@ -74,6 +75,9 @@
           &mdash; the buttons stay three while the space behind them grows.
           Quaternary is where that pays: relating two directions in a wider
           space carries more without asking memory to hold more.</div>
+        <div class="hint"><b>Glyph</b> is the symbol on the slot read as a rank &mdash;
+          1&ndash;5, A&ndash;E, &alpha;&ndash;&epsilon; or I&ndash;V, one set per block
+          &mdash; and answered with <b>+</b> and <b>&minus;</b>.</div>
         <div class="hint" id="progCoordCount"></div>
         <div class="hint" id="progCoordOwned"></div>
       </div>
@@ -305,6 +309,19 @@
           interval to at least 1.30s so there is time to answer after the cue.</div>
       </div>
       <div class="setting-group">
+        <label>Relational glyphs</label>
+        <select id="glyphRelF">
+          <option value="map">Set map + rank</option>
+          <option value="rank">Rank only — simple</option>
+        </select>
+        <div class="hint">What the Glyph stream asks when it is set to Relational.
+          <b>Set map + rank</b>: four symbol sets on a 2×2 map; report how the symbol
+          moved across the map and whether its rank rose or fell. <b>Rank only</b>:
+          one set for the whole block (1&ndash;5, A&ndash;E, &alpha;&ndash;&epsilon;
+          or I&ndash;V); report only whether the rank went up (<b>+</b>) or down
+          (<b>&minus;</b>). No map to learn.</div>
+      </div>
+      <div class="setting-group">
         <label><input type="checkbox" id="fixedGlyphMap" style="width:auto"> Fixed symbol
           map</label>
         <div class="hint">Normally the 2×2 map of symbol sets reshuffles every session so
@@ -352,6 +369,7 @@
           <label><input type="checkbox" data-coord="color"> Colour</label>
           <label><input type="checkbox" data-coord="size"> Size</label>
           <label><input type="checkbox" data-coord="quantity"> Quantity</label>
+          <label><input type="checkbox" data-coord="glyph"> Glyph</label>
         </div>
         <div class="hint">Each one becomes a <b>coordinate of the move</b> rather
           than a stream beside it, judged exactly as the three cube axes are.
@@ -361,6 +379,9 @@
           meta-relations is its own answer. The buttons stay three while the space
           behind them grows. A property cannot also be judged as its own stream
           while it is a coordinate.</div>
+        <div class="hint"><b>Glyph</b> is the symbol on the slot read as a rank &mdash;
+          1&ndash;5, A&ndash;E, &alpha;&ndash;&epsilon; or I&ndash;V, one set per block
+          &mdash; and answered with <b>+</b> and <b>&minus;</b>.</div>
         <div class="hint" id="coordCount"></div>
       </div>
       <div class="setting-group">
@@ -562,6 +583,21 @@
         the screen the lattice simply runs off the edges, and the size you ask for is the
         size you get.</div>
     </div>
+    <div class="setting-group">
+      <label>Answer keys</label>
+      <select id="keyLayout">
+        <option value="auto">Auto — pad on a phone or touch screen, row elsewhere</option>
+        <option value="pad">Pad — directions where they point</option>
+        <option value="row">Row — one line of keys</option>
+      </select>
+      <div class="hint">How the direction keys are laid out. The <b>pad</b> puts
+        north, south, east and west where they point, with the corners between them
+        pressing two at once and above/below as a pair beside it; the <b>row</b> is
+        the single line a keyboard player sees. Scoring is the same either way: a
+        corner is two taps in one. The <b>Pad</b> switch beside Start block flips
+        between the two between blocks; choose Auto here to hand the decision back
+        to the device. Kept for this device only.</div>
+    </div>
     </div>
   </details>
 
@@ -710,6 +746,8 @@
     <div class="controls">
       <button id="startBtn" class="primary">Start block</button>
       <button id="stopBtn">Stop</button>
+      <button id="padToggle" class="pad-toggle" type="button" aria-pressed="false"
+              title="Answer keys: the compass pad, or one row">Pad<span class="sw" aria-hidden="true"></span></button>
     </div>
   </div>
 </main>

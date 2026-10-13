@@ -1111,6 +1111,29 @@ test("a trainer made by new-trainer.mjs, with a played session, passes check-tra
   }
 });
 
+/*
+ * Relation Algebra and Listening Integration, through the sample records each
+ * one exported from a session actually played, under the key its own source
+ * writes. Read out of the trainer rather than typed here, because the way this
+ * breaks is a key renamed on one side and not the other — and then the meter
+ * shows a smaller day, not an error. (From mindbuild, which carries both.)
+ */
+test("Relation Algebra and Listening Integration reach the meter", () => {
+  const fs = require("fs");
+  for (const [id, src] of [["relations", "trainer.js"], ["listening", "listening.js"]]) {
+    const code = fs.readFileSync(path.join(__dirname, "..", "apps", id, src), "utf8");
+    const key = (code.match(/RECORD_KEY\s*=\s*"([^"]+)"/) || [])[1];
+    assert.strictEqual(key, `chimera.${id}.record.v1`,
+      `${id} writes its record under ${key}, which the meter's pattern does not match`);
+    const sample = fs.readFileSync(path.join(__dirname, "..", "apps", id, "test", "sample-record.json"), "utf8");
+    const day = new Date(JSON.parse(sample).sessions[0].start).toISOString().slice(0, 10);
+    reset();
+    store[key] = sample;
+    store[`chimera.${id}.settings.v1`] = "{}";        // a neighbour key, not a record
+    assert.ok(Today.minutesOn(day)[id] > 0, `${id}'s session produced no minutes`);
+  }
+});
+
 for (const [name, fn] of cases) {
   try { fn(); passed++; console.log(`  ok  ${name}`); }
   catch (e) { console.error(`FAIL  ${name}\n      ${e.message}`); process.exitCode = 1; }

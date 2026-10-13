@@ -441,6 +441,20 @@ export class ProgressionService {
     }
 
     /**
+     * How many answered items of a mode carried a rung.
+     *
+     * Carried, not held: a trial's rungs are the ones its item delivered, so
+     * this is how often the player has actually met the thing. The generator
+     * weights its draw by it, so a rung just earned comes up often enough to be
+     * learned before the next one arrives.
+     */
+    carriedCount(type: EnumQuestionType, rung: string): number {
+        let n = 0;
+        for (const t of this.trials()) if (t.type === type && t.rungs?.includes(rung)) n++;
+        return n;
+    }
+
+    /**
      * What the answered items say the rung costs should be.
      *
      * Reported, never applied. A fit from a handful of trials is worse than the
@@ -1403,6 +1417,10 @@ export class ProgressionService {
              * one. Read only with `perClaimCredit` on.
              */
             claims?: Array<{ correct: boolean; slots: number; fromPremises?: number }>;
+            /** Rungs held but not carried by this item; see `Question.undelivered`. */
+            undelivered?: string[];
+            /** Levels beyond mode and rungs; see `Question.surcharge`. */
+            surcharge?: number;
         },
     ): LadderEvent[] {
         if (!this.config.enabled) { this.lastEvents = []; return []; }
@@ -1446,9 +1464,18 @@ export class ProgressionService {
          */
         const wasProbe = this.isProbeTurn(type);
         const before = this.configFor(type, wasProbe);
+        /*
+         * The rungs the item carried, not the ones it was allowed. A rung that
+         * competes for the question form is held on every item and delivered
+         * on some, and pricing the rest at it credits a right answer as harder
+         * than it was.
+         */
+        const carried = ladderFor(type).slice(0, before.rungs)
+            .filter(r => !item?.undelivered?.includes(r));
         const level = levelOf({
             type, premises: before.premises,
-            rungs: ladderFor(type).slice(0, before.rungs),
+            rungs: carried,
+            surcharge: item?.surcharge ?? 0,
             // The dials are part of the configuration, so they are part of what
             // the item was worth. Leaving them out under-prices every item that
             // turned one, which is the same fault as pricing the printed
@@ -1487,7 +1514,7 @@ export class ProgressionService {
         this.pushTrial({
             type,
             premises: before.premises,
-            rungs: ladderFor(type).slice(0, before.rungs),
+            rungs: carried,
             dials: before.dials,
             seconds: before.seconds,
             estimate,
@@ -1495,6 +1522,7 @@ export class ProgressionService {
             correct,
             timedOut: outcome === "timeout",
             widthDelta: item?.widthDelta ?? 0,
+            surcharge: item?.surcharge ?? 0,
             depth: item?.depth ?? 0,
             arity: item?.arity ?? 0,
             integration: item?.integration ?? 0,
@@ -1552,7 +1580,8 @@ export class ProgressionService {
                     levelOf({
                         type,
                         premises: claim.fromPremises ?? before.premises,
-                        rungs: ladderFor(type).slice(0, before.rungs),
+                        rungs: carried,
+                        surcharge: item?.surcharge ?? 0,
                         dials: before.dials,
                         seconds: before.seconds,
                         widthDelta: item?.widthDelta ?? 0,

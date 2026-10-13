@@ -1318,7 +1318,12 @@ function readArchiveExport(file) {
   }
 
   var names = Object.keys(bySource);
-  if (!names.length) return null;
+  /* An archive with no trainer in it yet can still hold what was typed into
+     it — a diary begun before the first import — and that is the one thing
+     here worth not turning away. */
+  var authored = (Array.isArray(file.notes) && file.notes.length)
+    || (Array.isArray(file.study) && file.study.length) || !!file.diary;
+  if (!names.length && !authored) return null;
 
   var readings = [];
   for (var n = 0; n < names.length; n++) {
@@ -1348,8 +1353,14 @@ function readArchiveExport(file) {
      them: they belong to no trainer, and splitting them across sources would
      merge every note once per source. */
   var notes = Array.isArray(file.notes) ? file.notes : [];
+  // The weekly log's study entries and settings, for the same reason.
+  var study = Array.isArray(file.study) ? file.study : [];
+  var diary = file.diary && typeof file.diary === "object" ? file.diary : null;
 
-  return { archive: true, writtenOn: writtenOn, readings: readings, notes: notes };
+  return {
+    archive: true, writtenOn: writtenOn, readings: readings,
+    notes: notes, study: study, diary: diary,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -1611,6 +1622,7 @@ if (typeof module !== "undefined") {
     readPrepared: readPrepared,
     readChimeraRecord: readChimeraRecord,
     readArchiveExport: readArchiveExport,
+    readChimeraRecord: readChimeraRecord,
     MAX_ITEM_SECONDS: MAX_ITEM_SECONDS,
   };
 }

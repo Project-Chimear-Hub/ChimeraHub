@@ -68,6 +68,16 @@ $('feedbackMode').onchange = e => {
 $('accentCustom').oninput  = e => { appearance.accent = e.target.value; applyAppearance(); saveAppearance(); };
 $('axisPalette').onchange  = e => { appearance.palette = e.target.value; applyAppearance(); saveAppearance(); };
 $('flatMode').onchange     = e => { appearance.flat = e.target.checked; applyAppearance(); saveAppearance(); };
+$('keyLayout').onchange    = e => { appearance.keys = e.target.value; applyKeyLayout(); saveAppearance(); };
+/* The switch beside Start block: whatever is drawn now, the other one, by name —
+   so it leaves Auto, which only the panel brings back. Blurred after, because a
+   focused button answers Space and Enter, and those belong to the session. */
+$('padToggle').onclick = e => {
+  if (state.running) return;
+  appearance.keys = document.documentElement.classList.contains('keys-pad') ? 'row' : 'pad';
+  applyKeyLayout(); saveAppearance();
+  e.currentTarget.blur();
+};
 $('bgDim').oninput         = e => {
   appearance.dim = +e.target.value;
   $('dimVal').textContent = appearance.dim;
@@ -89,6 +99,11 @@ $('bgFit').onclick = () => {
 $('rcTier').onchange = e => {
   switchTier(+e.target.value);
   applyProgression(); syncSettingsUI(); updateHUD(); saveProgress();
+};
+
+$('glyphRelF').onchange = e => {
+  freeCfg.glyphRel = e.target.value === 'rank' ? 'rank' : 'map';
+  applyFree(); syncSettingsUI(); updateHUD(); renderGlyphLegend(); saveProgress();
 };
 
 $('fixedGlyphMap').onchange = e => {
@@ -373,7 +388,7 @@ $('cubeLayout').onchange = e => {
 /* --- run controls --- */
 $('startBtn').onclick = () => {
   setSettingsOpen(false);
-  if (cfg.streams.glyph === 'relational') showGlyphIntro(startBlock);
+  if (glyphUsesMap()) showGlyphIntro(startBlock);
   else startBlock();
 };
 $('stopBtn').onclick = () => stopBlock(false);

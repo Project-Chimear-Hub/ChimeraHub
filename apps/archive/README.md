@@ -37,10 +37,17 @@ is idempotent: running it twice costs nothing and changes nothing.
   file, not its name, because a third-party export always arrives called
   `export (3).json`.
 - **Drop the archive itself** to restore it after a reset.
-- **Read this browser** pulls straight from Syllogimous, Isomorph, RNB, CCT, eWMT and Synth when the page is
-  served from the same origin they are — on GitHub Pages every repo of one
-  account shares an origin, so on the deployed site no export is needed. Locally
-  they are separate origins and it finds nothing.
+- **This browser is read by itself.** Syllogimous, Isomorph, RNB, CCT, eWMT,
+  Synth, Precision, Rotation, Running Order and every trainer writing the
+  Chimera record are pulled straight from storage when the page is served from
+  the same origin they are — on GitHub Pages every repo of one account shares
+  an origin, and the APK serves everything from one, so there no export is
+  needed. It happens when the page opens, when its tab comes back into view,
+  and a few seconds after a trainer in another tab saves. A read that finds
+  nothing new leaves no trace — no log line, no undo, no download warning — so
+  the warning only ever means something arrived. The **Read this browser**
+  button does the same on demand and reports every source, changed or not.
+  Locally the trainers are separate origins and it finds nothing.
 - **Write notes** for anything no export knows: a test score, an illness, a
   change of dose, a month you felt slow. See below.
 - **Download archive** writes the file. Do this whenever you have imported
@@ -118,6 +125,38 @@ It follows the rules below rather than bending them for a better-looking post:
   whose exports are half missing are an undercount and have to look like one.
 - **The post says what it is**: one test before and one after is an anecdote,
   and the picture and the text both end by saying so.
+## The weekly log
+
+Hours a week against a goal — by default 14, and the panel is named for the
+diary it keeps, *The Lantern Hours* (both are in its settings). A week is two
+things added together:
+
+- **Trainer time**, from the same `minutes` table the year and the day table
+  read, so the log can never disagree with them about a week. Under each
+  trainer, its modes, from the items' own seconds — listed *beneath* the
+  trainer's clock and never in place of it, since a trainer's clock also runs
+  between items. What the items do not account for is shown as its own line.
+- **Study time**, typed in: a day, a subject, hours, and optionally what. No
+  export holds it, so it is kept, merged and cached exactly like a note — by
+  when it was written, with tombstones for deletions, whole in the cache.
+
+Weeks start on Monday and run from the diary's start day (or, without one, its
+first study entry). Trainer time before the start is history and is left out:
+a hundred hours of last year's play would otherwise make the first month's
+average meaningless.
+
+Two rules keep the average honest:
+
+- **A week with nothing logged counts as zero.** An average over only the weeks
+  somebody remembered to log is the one every diary flatters itself with, and
+  the one a retest would contradict.
+- **The week in progress is never averaged.** Tuesday's three hours are not a
+  three-hour week. It is shown apart, with what it still needs — both to reach
+  the goal on its own, and for the running average to stand on the goal once it
+  ends, which carries any shortfall from the weeks before.
+
+The logic is `js/weekly.js`; `weeklyLog(archive, { today })` takes the day from
+outside so the tests stand on a fixed date and the page can pass its local one.
 
 ## The rules it is built on
 

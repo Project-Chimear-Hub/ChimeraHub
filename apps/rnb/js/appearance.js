@@ -98,7 +98,35 @@ const AXIS_PALETTES = {
 const appearance = {
   theme: 'chimera', accent: '#d4af37', dim: 68,
   palette: 'default', flat: false, bgFit: 'cover', bg: null,
+  keys: 'auto',
 };
+
+/* ---- the answer keys' layout ----
+   The compass pad (deck.js) is drawn wherever the root carries `keys-pad`. On
+   Auto that follows the device — a coarse pointer, or a phone-width window, the
+   test responsive.css used to make on its own — and is re-decided when that
+   changes, so turning a tablet or narrowing a window moves between the two
+   without a reload. Pad and Row force one layout anywhere. Only a class changes:
+   the deck already holds both layouts and the dock is re-measured by its
+   ResizeObserver, so nothing is rebuilt. Stored with the appearance, not the
+   profile, because the right answer is the device's, not the player's. */
+const PAD_MEDIA = typeof matchMedia === 'function'
+  ? matchMedia('(pointer: coarse), (max-width: 700px)') : null;
+function applyKeyLayout() {
+  const pref = appearance.keys || 'auto';
+  const pad = pref === 'pad' || (pref === 'auto' && !!(PAD_MEDIA && PAD_MEDIA.matches));
+  document.documentElement.classList.toggle('keys-pad', pad);
+  /* The switch on the main screen and the select in the panel say the same thing. */
+  if (typeof document.getElementById !== 'function') return;
+  const sw = document.getElementById('padToggle');
+  if (sw) sw.setAttribute('aria-pressed', String(pad));
+  const sel = document.getElementById('keyLayout');
+  if (sel) sel.value = pref;
+}
+if (PAD_MEDIA) {
+  if (PAD_MEDIA.addEventListener) PAD_MEDIA.addEventListener('change', applyKeyLayout);
+  else if (PAD_MEDIA.addListener) PAD_MEDIA.addListener(applyKeyLayout);
+}
 
 function loadAppearance() {
   try {
@@ -213,6 +241,7 @@ function applyAppearance() {
   document.body.classList.toggle('has-bg', !!appearance.bg);
 
   document.body.classList.toggle('flat', !!appearance.flat);
+  applyKeyLayout();
 
   /* Axis colours live on the AXES constants because the gizmo and the deck both read
      them, so a palette change has to rebuild both. */
@@ -260,6 +289,7 @@ function renderAppearanceUI() {
   $('dimVal').textContent = appearance.dim;
   $('axisPalette').value = appearance.palette;
   $('flatMode').checked = !!appearance.flat;
+  $('keyLayout').value = appearance.keys || 'auto';
   const row = $('accentRow');
   if (row && !row.children.length) {
     ACCENTS.forEach(c => {

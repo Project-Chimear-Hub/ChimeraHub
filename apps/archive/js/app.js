@@ -12,10 +12,13 @@
 
 /* global emptyArchive, fold, foldNotes, days, dayRow, overlap, sourceSummary, cacheSave,
    cacheLoad, readFile, makeNote, noteId, tombstone, mergeNotes, visibleNotes, notesOn,
-   measureSeries, tagCounts, estimate, tierLabel, TIERS */
+   measureSeries, tagCounts, estimate, tierLabel, TIERS, makeStudy, studyProblem,
+   studyTombstone, mergeStudy, visibleStudy, knownSubjects, makeDiary, foldStudy,
+   weeklyLog */
 
 var archive = cacheLoad() || emptyArchive();
 if (!Array.isArray(archive.notes)) archive.notes = [];
+if (!Array.isArray(archive.study)) archive.study = [];
 var $ = function (id) { return document.getElementById(id); };
 
 /** Weeks of overlap before a cross-app comparison is worth computing. */
@@ -49,6 +52,8 @@ var SOURCE_NAMES = {
   synth: "Synaesthesia colours",
   chimera: "Chimera",
   relational: "Relational N-back",
+  relations: "Relation Algebra",
+  listening: "Listening Integration",
 };
 
 function sourceName(id) {
@@ -75,6 +80,8 @@ var SOURCE_COLOURS = {
   synth: "#56d4dd",
   chimera: "#58a6ff",
   relational: "#56d364",
+  relations: "#d2a8ff",
+  listening: "#7ee787",
 };
 
 function sourceColour(id) {
@@ -258,6 +265,7 @@ function undoImport() {
   undoState = null;
   cacheSave(archive);
   if (unsavedImports > 0) { unsavedImports--; storeSaveState(); }
+  writeMemo({});
   note("last import undone — back to " + archive.records.length + " records");
   render();
 }
@@ -290,12 +298,15 @@ function importText(text, name) {
        reading — and they are folded at all, which a restore depends on: they
        exist in this file and in no export anywhere. */
     var noted = foldNotes(archive, reading.notes);
+    var studied = foldStudy(archive, reading.study, reading.diary);
     var ok = cacheSave(archive);
     note(name + " → archive (" + reading.readings.length + " sources): "
       + total.added + " new, " + total.updated + " updated, "
       + total.days + " new days"
       + (noted.added || noted.updated
         ? ", " + noted.added + " new notes, " + noted.updated + " updated" : "")
+      + (studied.added || studied.updated
+        ? ", " + studied.added + " new study entries, " + studied.updated + " updated" : "")
       + (ok ? "" : " (cache full — keep the archive file)"));
     markUnsaved();
     render();
@@ -337,8 +348,9 @@ function takeFiles(fileList) {
  * without an export at all. Locally they are separate origins and this finds
  * nothing, which is why it is a convenience and never the way data arrives.
  */
-function importNeighbours() {
-  var found = 0;
+function neighbourTexts() {
+  var out = [];
+  var take = function (text, name) { out.push({ text: text, name: name }); };
 
   try {
     var syl = {};
@@ -348,7 +360,7 @@ function importNeighbours() {
         syl[key] = localStorage.getItem(key);
       }
     }
-    if (syl.SYL_HISTORY || syl.SYL_HISTORY_IDX) { importText(JSON.stringify(syl), "syllogimous (this browser)"); found++; }
+    if (syl.SYL_HISTORY || syl.SYL_HISTORY_IDX) { take(JSON.stringify(syl), "syllogimous (this browser)"); }
   } catch (e) { /* storage off */ }
 
   /* Isomorph, which was the same codebase writing the same key names under a
@@ -366,7 +378,7 @@ function importNeighbours() {
         if (isoKey === "ISO/SYL_HISTORY" || isoKey === "ISO/SYL_HISTORY_IDX") hasIso = true;
       }
     }
-    if (hasIso) { importText(JSON.stringify(iso), "isomorph (this browser)"); found++; }
+    if (hasIso) { take(JSON.stringify(iso), "isomorph (this browser)"); }
   } catch (e) { /* storage off */ }
 
   /* Sources that keep everything under a single localStorage key. The first two
@@ -397,8 +409,24 @@ function importNeighbours() {
       if (!val) continue;
       var wrap = {};
       wrap[singles[s].key] = val;
-      importText(JSON.stringify(wrap), singles[s].label + " (this browser)");
-      found++;
+      take(JSON.stringify(wrap), singles[s].label + " (this browser)");
+    }
+  } catch (e) { /* storage off */ }
+
+  /* Every trainer writing the Chimera record format — Relation Algebra and
+     Listening Integration so far. Found by pattern rather than listed, so the
+     next one to arrive is read without a line here. The value is the whole
+     record and needs no wrapper. */
+  try {
+    var chimeraKeys = [];
+    for (var c = 0; c < localStorage.length; c++) {
+      var ck = localStorage.key(c);
+      if (ck && /^chimera\.[a-z][a-z0-9-]*\.record\.v1$/.test(ck)) chimeraKeys.push(ck);
+    }
+    for (var ci = 0; ci < chimeraKeys.length; ci++) {
+      var cv = localStorage.getItem(chimeraKeys[ci]);
+      if (!cv) continue;
+      take(cv, chimeraKeys[ci].split(".")[1] + " (this browser)");
     }
   } catch (e) { /* storage off */ }
 
@@ -423,11 +451,130 @@ function importNeighbours() {
     var list = profiles && profiles.list ? profiles.list : [];
     for (var j = 0; j < list.length; j++) {
       var raw = localStorage.getItem("rnb.progress.v2." + list[j].id);
-      if (raw) { importText(raw, "rnb: " + list[j].name + " (this browser)"); found++; }
+      if (raw) { take(raw, "rnb: " + list[j].name + " (this browser)"); }
     }
   } catch (e) { /* storage off, or no rnb here */ }
 
-  if (!found) note("Nothing found in this browser's storage — drop the exports in instead.");
+  return out;
+}
+
+/** The button: every source found, each reported, even when nothing changed. */
+function importNeighbours() {
+  var found = neighbourTexts();
+  for (var i = 0; i < found.length; i++) importText(found[i].text, found[i].name);
+  if (!found.length) note("Nothing found in this browser's storage — drop the exports in instead.");
+  var memo = readMemo();
+  for (var j = 0; j < found.length; j++) memo[found[j].name] = fingerprint(found[j].text);
+  writeMemo(memo);
+}
+
+/**
+ * Reading this browser without being asked.
+ *
+ * The button was the only way in, so the archive held whatever was there the
+ * last time somebody remembered to press it — and a record that has to be
+ * remembered to be kept is the one that is not kept. Now the page reads by
+ * itself: when it opens, when its tab comes back into view, and a few seconds
+ * after a trainer in another tab of this site writes its storage.
+ *
+ * Quiet unless something changed. Every source folds into one pass, and only
+ * a pass that added or updated something takes an undo snapshot, writes one
+ * line to the log and counts as an import the file does not have yet. A read
+ * that found only what the archive already holds — every visit after the
+ * first, until the next session — leaves nothing behind: no log line, no undo,
+ * and no warning to download a file that is already up to date.
+ *
+ * An unreadable source is reported once per page load. Saying it on every
+ * visit would bury the log; saying it never would hide a broken adapter.
+ */
+var autoErrors = {};
+
+/*
+ * What each source's storage said the last time it was read, as a
+ * fingerprint, so a visit that finds the same text skips it before parsing.
+ *
+ * The merge cannot be the judge of "nothing new" here. The cache keeps records
+ * without their bulky `raw` half, so after a reload the same storage folds in
+ * as "1 updated" — measured in the browser: every visit counted another import
+ * the file lacked, and the warning stopped meaning anything. The text a
+ * trainer left in storage is the honest test of whether it has said anything
+ * since; it also spares re-reading a long history on every visit.
+ *
+ * Cleared whenever the archive is replaced from outside — a restored file, an
+ * undone import — since the archive may then lack what the memo says it read.
+ */
+var READ_KEY = "archive.read.v1";
+
+function readMemo() {
+  try { return JSON.parse(localStorage.getItem(READ_KEY) || "{}") || {}; } catch (e) { return {}; }
+}
+
+function writeMemo(memo) {
+  try { localStorage.setItem(READ_KEY, JSON.stringify(memo)); } catch (e) { /* storage off */ }
+}
+
+/** Length and FNV-1a: enough to tell one storage text from the next. */
+function fingerprint(text) {
+  var h = 0x811c9dc5;
+  for (var i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return text.length + ":" + h.toString(36);
+}
+
+function readThisBrowser() {
+  var found = neighbourTexts();
+  if (!found.length) return;
+  var memo = readMemo(), seen = {};
+  var fresh = found.filter(function (f) {
+    seen[f.name] = fingerprint(f.text);
+    return memo[f.name] !== seen[f.name];
+  });
+  if (!fresh.length) return;
+  var before = null;
+  try { before = JSON.stringify(archive); } catch (e) { before = null; }
+
+  var total = { added: 0, updated: 0, days: 0 }, from = [];
+  for (var i = 0; i < fresh.length; i++) {
+    var reading = readFile(fresh[i].text);
+    if (reading.error) {
+      var said = fresh[i].name + ": " + reading.error;
+      if (!autoErrors[said]) { autoErrors[said] = true; note(said, true); }
+      // Not remembered, so a fixed adapter reads it on the next visit.
+      delete seen[fresh[i].name];
+      continue;
+    }
+    // A trainer's storage is never one of our own exports; only the button
+    // and a drop restore those.
+    if (reading.archive) continue;
+    var r = fold(archive, reading, fresh[i].name);
+    total.added += r.added; total.updated += r.updated; total.days += r.days;
+    if ((r.added || r.updated || r.days) && from.indexOf(reading.source) < 0) from.push(reading.source);
+  }
+  if (!from.length) { writeMemo(Object.assign(memo, seen)); return; }
+
+  undoState = before;
+  var saved = cacheSave(archive);
+  // Only once the cache holds it: a read the cache could not keep is read again.
+  if (saved) writeMemo(Object.assign(memo, seen));
+  note("read this browser → " + from.join(", ") + ": " + total.added + " new, "
+    + total.updated + " updated, " + total.days + " new days"
+    + (saved ? "" : " (cache full — keep the archive file)"));
+  markUnsaved();
+  render();
+}
+
+/*
+ * Debounced, because a trainer writes its storage on every answer: a session
+ * would otherwise mean a read per item. Deferred while the tab is hidden —
+ * coming back into view reads anyway.
+ */
+var readTimer = 0;
+
+function readSoon(delay) {
+  clearTimeout(readTimer);
+  readTimer = setTimeout(function () {
+    if (document.visibilityState === "hidden") return;
+    readThisBrowser();
+  }, delay);
 }
 
 /* ------------------------------------------------------------------ *
@@ -448,13 +595,20 @@ function render() {
   renderMeasures();
   renderKnownTags();
   renderAnecdote();
+  renderLantern();
   renderSaveState();
   refreshUndo();
   /* Notes count as something to download, not just records.
      A fresh archive with a note in it and no imports had nothing to save by
      this test — so the page marked the file behind, armed the warning on close,
      and disabled the one button that could have written the note out. */
-  $("save").disabled = archive.records.length === 0 && visibleNotes(archive).length === 0;
+  $("save").disabled = !hasContent();
+}
+
+/** Anything worth writing out: records, or anything typed in by hand. */
+function hasContent() {
+  return archive.records.length > 0 || visibleNotes(archive).length > 0
+    || visibleStudy(archive).length > 0 || !!archive.diary;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1449,6 +1603,190 @@ function downloadAnecdotePng() {
 }
 
 /* ------------------------------------------------------------------ *
+ * The weekly log                                                      *
+ * ------------------------------------------------------------------ */
+
+/*
+ * Everything here is computed by `weeklyLog` in weekly.js, which is the half
+ * with tests. Study entries are typed by a person, so every string is escaped.
+ */
+
+/** A week's bar: trainer time, then study, against the goal. */
+function weekBar(trainer, study, goal) {
+  var scale = Math.max(goal, trainer + study) || 1;
+  return "<span class='wbar' title='" + fmt(trainer, 1) + " h trainers, "
+    + fmt(study, 1) + " h study, goal " + fmt(goal, 1) + " h'>"
+    + "<i class='t' style='inline-size:" + (100 * trainer / scale) + "%'></i>"
+    + "<i class='s' style='inline-size:" + (100 * study / scale) + "%'></i>"
+    + "<b style='inset-inline-start:" + (100 * goal / scale) + "%'></b></span>";
+}
+
+function renderLantern() {
+  var host = $("lanternNow");
+  if (!host) return;
+  var log = weeklyLog(archive, { today: localDay() });
+  var goal = log.goalHours;
+
+  $("lanternName").textContent = log.name;
+
+  var current = log.weeks.filter(function (w) { return w.current; })[0];
+  var cur = current || { trainer: 0, study: 0 };
+  host.innerHTML =
+    "<div class='card" + (log.thisWeek >= goal ? " ok" : "") + "'><h3>This week</h3>"
+      + "<p><b>" + fmt(log.thisWeek, 1) + "</b> of " + fmt(goal, 1) + " h</p>"
+      + weekBar(cur.trainer / 60, cur.study / 60, goal)
+      + "<p class='dim'>" + (log.thisWeekLeft > 0
+        ? fmt(log.thisWeekLeft, 1) + " h to the goal" : "goal met") + "</p></div>"
+    + "<div class='card" + (log.average != null && log.average >= goal ? " ok" : "") + "'>"
+      + "<h3>Running average</h3>"
+      + (log.average == null
+        ? "<p><b>—</b></p><p class='dim'>after the first finished week</p>"
+        : "<p><b>" + fmt(log.average, 1) + "</b> h a week</p><p class='dim'>over "
+          + log.finished + " finished week" + (log.finished === 1 ? "" : "s")
+          + ", goal met in " + log.weeksMet + "</p>")
+      + "</div>"
+    + "<div class='card'><h3>To hold " + fmt(goal, 1) + "</h3>"
+      + "<p><b>" + fmt(log.neededForAverage, 1) + "</b> h more this week</p>"
+      + "<p class='dim'>" + (log.neededForAverage > 0
+        ? "for the average to stand on the goal when the week ends"
+        : "the average stays on the goal whatever this week brings") + "</p></div>"
+    + "<div class='card'><h3>Since " + esc(log.start) + "</h3>"
+      + "<p><b>" + fmt(log.totals.trainer + log.totals.study, 1) + "</b> h</p>"
+      + "<p class='dim'>" + fmt(log.totals.trainer, 1) + " trainers · "
+      + fmt(log.totals.study, 1) + " study"
+      + (log.startSet ? "" : " · start not set") + "</p></div>";
+
+  // Newest week first: the one being lived in is the one being looked for.
+  var rows = log.weeks.slice().reverse().map(function (w) {
+    var subjects = Object.keys(w.bySubject).length;
+    return "<tr" + (w.current ? " class='now'" : "") + "><td>" + esc(w.week)
+      + (w.current ? " <span class='dim nowtag'>now</span>" : "") + "</td>"
+      + "<td>" + fmt(w.trainer / 60, 1) + "</td>"
+      + "<td title='" + subjects + " subject" + (subjects === 1 ? "" : "s") + "'>"
+      + fmt(w.study / 60, 1) + "</td>"
+      + "<td><b>" + fmt(w.total / 60, 1) + "</b></td>"
+      + "<td class='barcell'>" + weekBar(w.trainer / 60, w.study / 60, goal) + "</td>"
+      + "<td>" + (w.runningAverage == null ? "—" : fmt(w.runningAverage, 1)) + "</td></tr>";
+  }).join("");
+  $("lanternWeeks").innerHTML = "<tr><th>week of</th><th>trainers</th><th>study</th>"
+    + "<th>total</th><th>against " + fmt(goal, 1) + " h</th><th>avg</th></tr>" + rows;
+
+  var subjectCard = "<div class='card'><h3>Study by subject</h3>"
+    + (log.totals.bySubject.length
+      ? "<table>" + log.totals.bySubject.map(function (s) {
+          return "<tr><td>" + esc(s.subject) + "</td><td>" + fmt(s.hours, 1) + " h</td></tr>";
+        }).join("") + "</table>"
+      : "<p class='dim'>Nothing logged yet.</p>")
+    + "</div>";
+  var trainerCards = log.totals.byMode.filter(function (s) { return s.hours > 0; })
+    .map(function (s) {
+      var modes = s.modes.slice(0, 10).map(function (m) {
+        return "<tr><td>" + esc(m.label) + "</td><td>" + fmt(m.hours, 1) + " h</td></tr>";
+      }).join("");
+      var rest = s.modes.length > 10
+        ? "<tr><td class='dim'>" + (s.modes.length - 10) + " more</td><td>"
+          + fmt(s.modes.slice(10).reduce(function (a, m) { return a + m.hours; }, 0), 1)
+          + " h</td></tr>"
+        : "";
+      // The trainer's clock runs between items too; that part is said, not spread.
+      var gap = s.unattributed >= 0.05
+        ? "<tr><td class='dim'>" + (s.modes.length ? "between items" : "not timed per item")
+          + "</td><td>" + fmt(s.unattributed, 1) + " h</td></tr>"
+        : "";
+      return "<div class='card'><h3>" + dot(s.source) + esc(sourceName(s.source))
+        + " <span class='dim'>" + fmt(s.hours, 1) + " h</span></h3>"
+        + "<table>" + modes + rest + gap + "</table></div>";
+    }).join("");
+  $("lanternBreakdown").innerHTML = subjectCard + trainerCards;
+
+  var entries = visibleStudy(archive);
+  $("studyList").innerHTML = entries.length
+    ? entries.map(function (e) {
+        return "<li class='note' data-id='" + esc(e.id) + "'><div class='note__head'>"
+          + "<b>" + esc(e.day) + "</b><span class='pill'>" + esc(e.subject) + " <b>"
+          + fmt(e.minutes / 60, 2).replace(/\.?0+$/, "") + "</b> h</span>"
+          + (e.text ? "<span class='dim'>" + esc(e.text) + "</span>" : "")
+          + "<span class='note__acts'><button class='btn quiet' type='button' data-act='delete'>"
+          + "Delete</button></span></div></li>";
+      }).join("")
+    : "<li class='dim'>No study logged yet.</li>";
+
+  $("studySubjects").innerHTML = knownSubjects(archive).map(function (s) {
+    return "<option value='" + esc(s.subject) + "'></option>";
+  }).join("");
+
+  /* The settings form shows what is stored — except while being typed in, when
+     a render from elsewhere must not pull the text out from under the cursor. */
+  var diary = makeDiary(archive.diary);
+  var fields = { diaryName: diary.name, diaryGoal: diary.goalHours, diaryStart: diary.start || "" };
+  Object.keys(fields).forEach(function (id) {
+    if (document.activeElement !== $(id)) $(id).value = fields[id];
+  });
+}
+
+function submitStudy(e) {
+  if (e) e.preventDefault();
+  var now = Date.now();
+  var entry = makeStudy({
+    id: noteId(now),
+    day: $("studyDay").value || localDay(),
+    at: now,
+    subject: $("studySubject").value,
+    hours: $("studyHours").value,
+    text: $("studyText").value,
+  });
+  var problem = studyProblem(entry);
+  if (problem) { $("studyHint").textContent = problem; return; }
+
+  archive.study = mergeStudy(archive.study, [entry]).study;
+  archive.updatedAt = now;
+  cacheSave(archive);
+  markUnsaved();
+  note("study logged — " + entry.day + ", " + entry.subject + ", "
+    + fmt(entry.minutes / 60, 2) + " h");
+  /* The day and subject stay: the next entry is usually the same evening, or
+     the same subject the next day. The time and the detail do not carry. */
+  $("studyHours").value = "";
+  $("studyText").value = "";
+  $("studyHint").textContent = "";
+  render();
+}
+
+/* A tombstone, as with notes, so an older archive folded in later cannot
+   bring the entry back. */
+function deleteStudy(id) {
+  var e = archive.study.filter(function (x) { return x.id === id; })[0];
+  if (!e) return;
+  if (!confirm("Delete " + e.subject + " on " + e.day + "?")) return;
+  archive.study = mergeStudy(
+    archive.study.filter(function (x) { return x.id !== id; }),
+    [studyTombstone(e, Date.now())]).study;
+  archive.updatedAt = Date.now();
+  cacheSave(archive);
+  markUnsaved();
+  note("study entry deleted — " + e.day + ", " + e.subject);
+  render();
+}
+
+function submitDiary(e) {
+  if (e) e.preventDefault();
+  var now = Date.now();
+  archive.diary = makeDiary({
+    name: $("diaryName").value,
+    goalHours: $("diaryGoal").value,
+    start: $("diaryStart").value,
+    editedAt: now,
+  });
+  archive.updatedAt = now;
+  cacheSave(archive);
+  markUnsaved();
+  note("diary settings saved — " + archive.diary.goalHours + " h a week"
+    + (archive.diary.start ? " from " + archive.diary.start : ""));
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  render();
+}
+
+/* ------------------------------------------------------------------ *
  * Taking the archive out                                              *
  * ------------------------------------------------------------------ */
 
@@ -1477,14 +1815,21 @@ function loadArchive(text) {
   archive.imports = archive.imports || [];
   archive.minutes = archive.minutes || {};
   archive.notes = Array.isArray(archive.notes) ? archive.notes : [];
+  archive.study = Array.isArray(archive.study) ? archive.study : [];
+  archive.diary = archive.diary || null;
   cacheSave(archive);
   /* Restoring means the page was just handed a file that already holds all of
      this, so nothing is outstanding. */
   unsavedImports = 0;
   storeSaveState();
   note("archive restored — " + archive.records.length + " records"
-    + (archive.notes.length ? ", " + visibleNotes(archive).length + " notes" : ""));
+    + (archive.notes.length ? ", " + visibleNotes(archive).length + " notes" : "")
+    + (archive.study.length ? ", " + visibleStudy(archive).length + " study entries" : ""));
   render();
+  /* The file may be older than what this browser holds; anything newer comes
+     straight back in, and counts as not yet in a file — which it is not. */
+  writeMemo({});
+  readThisBrowser();
   return true;
 }
 
@@ -1556,6 +1901,15 @@ window.addEventListener("DOMContentLoaded", function () {
   });
   clearNoteForm();
 
+  $("studyDay").value = localDay();
+  $("studyForm").addEventListener("submit", submitStudy);
+  $("diaryForm").addEventListener("submit", submitDiary);
+  $("studyList").addEventListener("click", function (e) {
+    var btn = e.target.closest && e.target.closest("button[data-act]");
+    var li = btn && btn.closest("li[data-id]");
+    if (li) deleteStudy(li.getAttribute("data-id"));
+  });
+
   var drop = $("drop");
   ["dragenter", "dragover"].forEach(function (type) {
     drop.addEventListener(type, function (e) { e.preventDefault(); drop.classList.add("over"); });
@@ -1598,7 +1952,7 @@ window.addEventListener("DOMContentLoaded", function () {
      the archive, not the page the browser would otherwise offer to write. */
   document.addEventListener("keydown", function (e) {
     if (!(e.ctrlKey || e.metaKey) || (e.key !== "s" && e.key !== "S")) return;
-    if (!archive.records.length) return;
+    if (!hasContent()) return;
     e.preventDefault();
     saveArchive();
   });
@@ -1617,6 +1971,12 @@ window.addEventListener("DOMContentLoaded", function () {
   $("filterTo").value = filterTo;
 
   render();
+
+  readThisBrowser();
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") readSoon(300);
+  });
+  window.addEventListener("storage", function () { readSoon(3000); });
 
   try { watchSections(); } catch (e) { /* highlight only; the page works without it */ }
 });
