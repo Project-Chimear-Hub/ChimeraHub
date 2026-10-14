@@ -303,8 +303,9 @@
     var a = document.createElement("a");
     a.className = "icon" + (t.counted ? "" : " icon--uncounted");
     a.href = "#/" + t.id;
-    a.title = t.what;
-    a.innerHTML = '<span class="icon__tile"><span class="icon__mark"></span></span>'
+    a.title = t.what + (t.recommended ? " (recommended)" : "");
+    a.innerHTML = '<span class="icon__tile"><span class="icon__mark"></span>'
+      + (t.recommended ? '<span class="icon__tag">Recommended</span>' : '') + '</span>'
       + '<span class="icon__name"></span>'
       + (t.counted ? '<span class="icon__today" data-today="' + t.id + '"></span>'
                    : '<span class="icon__today" title="Its time is not counted toward today.">Not counted</span>');
@@ -341,9 +342,43 @@
     var root = $("cats");
     root.textContent = "";
     CATALOG.categories.forEach(function (c) { root.appendChild(folderIcon(NODES[c.id])); });
+    renderBeginner();
+    $("tagline").textContent = ALL.length + " trainers, one record, one daily total.";
     if (openPath.length) renderFolder();
     paintToday();
   }
+
+  /* ---- the beginner's shelf ---- */
+
+  /* Namespaced like the quota, and on the same origin as every trainer. "1"
+     means asked and confirmed; nothing stored, or "0" after Hide, shows the
+     question again. */
+  var BEGINNER_KEY = "chimerahub.beginner";
+  function beginnerOn() { try { return localStorage.getItem(BEGINNER_KEY) === "1"; } catch (e) { return false; } }
+  function setBeginner(on) { try { localStorage.setItem(BEGINNER_KEY, on ? "1" : "0"); } catch (e) { /* private mode */ } }
+
+  function renderBeginner() {
+    var on = beginnerOn();
+    $("beginner-ask").hidden = on;
+    $("beginner-confirm").hidden = true;
+    $("beginner-shelf").hidden = !on;
+    var grid = $("beginner-grid");
+    grid.textContent = "";
+    if (on) (CATALOG.beginner || []).forEach(function (id) { if (byId[id]) grid.appendChild(trainerIcon(byId[id])); });
+  }
+  $("beginner-ask").addEventListener("click", function () {
+    $("beginner-ask").hidden = true;
+    $("beginner-confirm").hidden = false;
+    $("beginner-yes").focus();
+  });
+  $("beginner-yes").addEventListener("click", function () {
+    setBeginner(true);
+    renderBeginner();
+    var first = $("beginner-grid").querySelector(".icon");
+    if (first) first.focus();
+  });
+  $("beginner-no").addEventListener("click", function () { renderBeginner(); $("beginner-ask").focus(); });
+  $("beginner-hide").addEventListener("click", function () { setBeginner(false); renderBeginner(); $("beginner-ask").focus(); });
 
   /* ---- an open folder: a panel over the home screen ---- */
 

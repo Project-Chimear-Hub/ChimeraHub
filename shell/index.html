@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chimera Hub</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="css/shell.css?v=17">
+<link rel="stylesheet" href="css/shell.css?v=18">
 </head>
 <body data-base="%BASE%">
 
@@ -15,7 +15,28 @@
     <h1>Chimera Hub</h1>
     <a class="btn ghost discord" href="https://discord.com/invite/chmr" target="_blank" rel="noopener">Discord ↗</a>
   </div>
-  <p class="dim">Eleven trainers, one record, one daily total.</p>
+  <p class="dim" id="tagline">Trainers, one record, one daily total.</p>
+  <!-- Someone new gets two plain originals to start on rather than the whole
+       home screen at once. Asked, confirmed, then remembered; hidden again on
+       request. The list is CATALOG.beginner; the behaviour is in the shell script. -->
+  <section class="beginner" id="beginner" aria-label="Where to start">
+    <button class="btn beginner__ask" type="button" id="beginner-ask">I am a beginner</button>
+    <div class="beginner__confirm" id="beginner-confirm" hidden>
+      <p>Show the two trainers to start with? They are the plain originals the
+        hub's harder variants grew out of. Everything else stays where it is.</p>
+      <button class="btn" type="button" id="beginner-yes">Yes, show them</button>
+      <button class="btn ghost" type="button" id="beginner-no">Cancel</button>
+    </div>
+    <div class="beginner__shelf" id="beginner-shelf" hidden>
+      <div class="beginner__head">
+        <h2>Start here</h2>
+        <button class="btn ghost" type="button" id="beginner-hide">Hide</button>
+      </div>
+      <p class="dim">Reasoning and n-back, each in its plain form. A few minutes
+        of each a day is enough to begin.</p>
+      <div class="home home--shelf" id="beginner-grid"></div>
+    </div>
+  </section>
 
   <section class="today" aria-labelledby="today-h">
     <div class="today__head">
@@ -139,7 +160,7 @@
 <script src="shared/share-kit/share-kit.js?v=1"></script>
 <script src="js/share.js?v=4"></script>
 <script src="js/pause.js?v=1"></script>
-<script src="js/catalog.js?v=2"></script>
-<script src="js/shell.js?v=17"></script>
+<script src="js/catalog.js?v=3"></script>
+<script src="js/shell.js?v=18"></script>
 </body>
 </html>

@@ -32,12 +32,18 @@ first category, or a folder inside it. All of it comes from
 
 | Folder | | Inside |
 |---|---|---|
-| RRT | relational reasoning training | Syllogimous, Running Order, and the **Relational N-back** folder: Relation Streams, Relational N-back |
-| N-back | | eWMT, Threshold N-back, N-back Constant Change |
+| RRT | relational reasoning training | Syllogimous, Syllogimous v4, Running Order, and the **Relational N-back** folder: Relation Streams, Relational N-back |
+| N-back | | eWMT, Threshold N-back, N-back Constant Change, Quad Box |
 | CCT | cognitive control training | CCT, Chimera |
 | ATT | attention training technique | Attention Training |
 | MOT | multiple object tracking | Earshot |
 | Posner, Spatial, Imagery, Inhibition, Speed, Other | | empty, with a link to submit a trainer |
+
+**I am a beginner**, at the top of the hub, asks once and then shows a
+"Start here" shelf with the two plain originals, Syllogimous v4 and Quad Box
+(`CATALOG.beginner`); Hide puts the question back. Syllogimous (both),
+Relational N-back and Quad Box carry a **Recommended** tag (`recommended` in the
+catalog).
 
 A trainer's other categories (Relation Streams and Relational N-back are
 n-backs too, Chimera has n-back modes) stay in the catalog for the data and
@@ -64,6 +70,8 @@ counted toward the day:
 | Attention Training | selective, switching and divided attention over a soundscape |
 | Earshot | tracking moving sounds by ear — 3D multiple object tracking for the ears |
 | N-back Constant Change | Quad Box's 3D quad n-back, with modalities and variant that keep changing (Vite) |
+| Syllogimous v4 | the original Syllogimous, by 4skinSkywalker (CC BY-NC 3.0; Angular) |
+| Quad Box | the original 3D quad n-back, by soamsy (MIT; Svelte, Vite) |
 
 Syllogimous, Relation Streams, Running Order and Threshold N-back come from
 [Gagafutzi](https://github.com/Gagafutzi) — the last three by way of
@@ -375,6 +383,15 @@ format — is what sets `counted: true` on it in `shell/js/catalog.js`.
 - `earshot/` — Earshot: identical sounds move around your head and you follow
   the targets by ear, with the speed adapting to find your threshold. Plain
   pages; every sound is synthesised in the browser. Headphones are needed.
+- `syllogimous-v4/` — Syllogimous v4, imported from
+  [4skinSkywalker/Syllogimous-v4](https://github.com/4skinSkywalker/Syllogimous-v4)
+  for the beginner's shelf. Its storage keys are prefixed `SYL4_` so it never
+  shares history with Loosh Syllogimous, and it loads nothing from the network
+  (no analytics; Playpen Sans is bundled). Built with Angular.
+- `quadbox-classic/` — Quad Box, imported from
+  [soamsy/quad-box](https://github.com/soamsy/quad-box) for the beginner's shelf
+  and the N-back folder. Its database is `QuadBoxClassic`, apart from N-back
+  Constant Change's `QuadBoxNBack`. Built with Vite at a relative base.
 - `quadbox/` — N-back Constant Change: Quad Box's 3D quad n-back, with a
   schedule that redraws the variant every training day and the permutation of
   modalities on a plateau. A Svelte app; `tools/build-site.mjs` builds it with

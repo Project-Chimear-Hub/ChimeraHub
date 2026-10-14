@@ -33,6 +33,8 @@ jobs:
             apps/syllogimous/package-lock.json
             apps/precision/package-lock.json
             apps/more/quadbox/package-lock.json
+            apps/more/quadbox-classic/package-lock.json
+            apps/more/syllogimous-v4/package-lock.json
 
       - name: Build the site
         run: node tools/build-site.mjs

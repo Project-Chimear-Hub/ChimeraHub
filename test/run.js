@@ -1134,6 +1134,16 @@ test("Relation Algebra and Listening Integration reach the meter", () => {
   }
 });
 
+test("the beginner's shelf and the recommended tags name trainers that exist", () => {
+  const ids = new Set(CATALOG.trainers.map((t) => t.id));
+  assert.ok(Array.isArray(CATALOG.beginner) && CATALOG.beginner.length, "no beginner's shelf");
+  for (const id of CATALOG.beginner) assert.ok(ids.has(id), `the beginner's shelf names ${id}, which is not in the catalog`);
+  const recommended = CATALOG.trainers.filter((t) => t.recommended).map((t) => t.id).sort();
+  assert.deepStrictEqual(recommended, ["quadbox-classic", "relational", "syllogimous", "syllogimous-v4"]);
+  const quad = CATALOG.trainers.find((t) => t.id === "quadbox-classic");
+  assert.strictEqual(quad.categories[0], "nback", "Quad Box is not on the N-back shelf");
+});
+
 for (const [name, fn] of cases) {
   try { fn(); passed++; console.log(`  ok  ${name}`); }
   catch (e) { console.error(`FAIL  ${name}\n      ${e.message}`); process.exitCode = 1; }

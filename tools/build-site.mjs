@@ -163,6 +163,29 @@ log("[build] more/quadbox (vite)");
     "--outDir", path.join(DIST, "more", "quadbox"), "--emptyOutDir"], dir);
 }
 
+/* The two originals the beginner's shelf offers, each built as its own
+   upstream builds it: Syllogimous v4 (Angular) and Quad Box (Vite). Each
+   keeps its storage under names of its own, so neither reads or writes the
+   history of the hub's variant of it (Loosh Syllogimous, N-back Constant
+   Change) on the same origin. */
+log("[build] more/syllogimous-v4 (angular)");
+{
+  const dir = path.join(ROOT, "apps", "more", "syllogimous-v4");
+  ensureDeps(dir);
+  run("npx", ["ng", "build", "--configuration=production",
+    "--output-path", path.join(DIST, "more", "syllogimous-v4"),
+    "--base-href", `${BASE}more/syllogimous-v4/`], dir);
+  fs.copyFileSync(path.join(DIST, "more", "syllogimous-v4", "index.html"),
+                  path.join(DIST, "more", "syllogimous-v4", "404.html"));
+}
+log("[build] more/quadbox-classic (vite)");
+{
+  const dir = path.join(ROOT, "apps", "more", "quadbox-classic");
+  ensureDeps(dir);
+  run("npx", ["vite", "build", "--base", "./",
+    "--outDir", path.join(DIST, "more", "quadbox-classic"), "--emptyOutDir"], dir);
+}
+
 /* Every other trainer in the catalog: the ones that came in through a
    submission, each with a chimera.json saying how it is built. Nothing here
    names them, so accepting a trainer never means editing this file. A
@@ -173,7 +196,7 @@ log("[build] more/quadbox (vite)");
 {
   const CATALOG = createRequire(import.meta.url)(path.join(ROOT, "shell", "js", "catalog.js"));
   const HANDLED = new Set(["syllogimous", "rnb", "rrt", "cct", "chimera", "ewmt", "relational",
-    "precision", "att", "earshot", "quadbox"]);
+    "precision", "att", "earshot", "quadbox", "syllogimous-v4", "quadbox-classic"]);
   for (const t of CATALOG.trainers) {
     if (HANDLED.has(t.id)) continue;
     const dir = path.join(ROOT, "apps", t.path);

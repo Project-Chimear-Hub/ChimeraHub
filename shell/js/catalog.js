@@ -43,6 +43,12 @@
                 archive's general adapter and can always be counted.
    `colour`     the dot on the card and its segment in the day's bar. Chosen
                 to stay apart from every other entry's on a dark ground.
+   `recommended` optional: the leaders' pick, tagged on the card.
+
+   ── The beginner's shelf ──
+
+   `beginner` lists the trainers someone new is pointed to when they say they
+   are a beginner: the plain originals, before the hub's harder variants.
 */
 
 var CATALOG = {
@@ -78,7 +84,7 @@ var CATALOG = {
 
   trainers: [
     { id: "syllogimous", name: "Syllogimous", path: "syllogimous/", colour: "#d29922",
-      categories: ["rrt"], counted: true,
+      categories: ["rrt"], counted: true, recommended: true,
       what: "Relational and syllogistic reasoning" },
     { id: "rrt", name: "Running Order", path: "rrt/", colour: "#c2e07a",
       categories: ["rrt"], counted: true,
@@ -87,7 +93,7 @@ var CATALOG = {
       categories: ["rrt", "nback"], folder: "relational-nback", counted: true,
       what: "N-back over relations, with a ladder" },
     { id: "relational", name: "Relational N-back", path: "relational/", colour: "#56d364",
-      categories: ["rrt", "nback"], folder: "relational-nback", counted: true,
+      categories: ["rrt", "nback"], folder: "relational-nback", counted: true, recommended: true,
       what: "Four streams of relations, n back" },
     { id: "ewmt", name: "eWMT", path: "ewmt/", colour: "#ff7b72",
       categories: ["nback"], counted: true,
@@ -119,7 +125,17 @@ var CATALOG = {
     { id: "relations", name: "Relation Algebra", path: "relations/", colour: "#d2a8ff",
       categories: ["rrt", "spatial"], counted: true,
       what: "Nested relations in seven materials, and routes on a cube" },
+    /* The originals, imported for the beginner's shelf: 4skinSkywalker's
+       Syllogimous v4 (CC BY-NC 3.0) and soamsy's Quad Box (MIT). */
+    { id: "syllogimous-v4", name: "Syllogimous v4", path: "more/syllogimous-v4/", colour: "#e3b341",
+      categories: ["rrt"], counted: false, recommended: true,
+      what: "The original Syllogimous: premises, then a conclusion to judge" },
+    { id: "quadbox-classic", name: "Quad Box", path: "more/quadbox-classic/", colour: "#ffc680",
+      categories: ["nback"], counted: false, recommended: true,
+      what: "3D quad n-back: position, colour, shape and sound" },
   ],
+
+  beginner: ["syllogimous-v4", "quadbox-classic"],
 
   /* Where "submit one" goes. A link the player follows, not a request the
      page makes: the hub still sends nothing anywhere on its own. */

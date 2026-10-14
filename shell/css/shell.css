@@ -689,3 +689,36 @@ body.folder-open { overflow: hidden; }
     background: #110e08;
   }
 }
+
+/* ---- recommended, and the beginner's shelf ---- */
+
+/* A strip across the top of the tile rather than a corner badge: the corner
+   of a 68px tile has no room for a word, and a star alone says nothing. */
+.icon__tag {
+  position: absolute;
+  top: -.55rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: .05rem .3rem;
+  font-size: .5rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--bg);
+  background: var(--accent);
+}
+.beginner { margin: 1rem 0 1.4rem; }
+.beginner__ask { font-size: .95rem; padding: .7rem 1.2rem; }
+.beginner__confirm, .beginner__shelf {
+  padding: 1rem 1.2rem;
+  background: var(--panel);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+}
+.beginner__confirm p { margin: 0 0 .8rem; }
+.beginner__head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.beginner__head h2 { margin: 0; }
+.beginner__shelf .dim { margin: .4rem 0 .9rem; font-size: .82rem; }
+.home--shelf { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); padding-top: .6rem; }
+.beginner [hidden] { display: none; }
